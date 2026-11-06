@@ -1,20 +1,35 @@
 [project]
-name = "atlas-rag"
+name = "atlas-review"
 version = "0.1.0"
-description = "Add your description here"
+description = "Local MITRE ATLAS security review RAG for AI application designs"
 readme = "README.md"
 authors = [
     { name = "Ryan Taylor", email = "ryan@beta-reduce.net" }
 ]
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "msgspec>=0.19",
+    "pydantic>=2,<3",
+    "pyyaml>=6",
+    "rich>=13",
+]
 
 [project.scripts]
-atlas-rag = "atlas_rag:main"
+atlas-review = "atlas_review:main"
 
 [build-system]
 requires = ["uv_build>=0.13.7,<0.14.0"]
 build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "atlas_review"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--disable-socket"
+markers = [
+    "smoke: requires model downloads and network access (opt-in)",
+]
 
 [dependency-groups]
 dev = [
@@ -30,3 +45,91 @@ dev = [
     "ruff>=0.17.4",
     "types-pyyaml>=6.0.12.20261103",
 ]
+
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # Pyflakes
+    "I",    # isort
+    "UP",   # pyupgrade
+    "B",    # flake8-bugbear
+    "SIM",  # flake8-simplify
+    "C4",   # flake8-comprehensions
+    "PT",   # flake8-pytest-style
+    "RUF",  # Ruff-specific
+    "ANN",  # flake8-annotations
+    "D",    # pydocstyle
+    "N",    # pep8-naming
+    "PERF", # Perflint
+    "PTH",  # flake8-use-pathlib
+    "RET",  # flake8-return
+    "ARG",  # flake8-unused-arguments
+    "TRY",  # tryceratops
+    "DTZ",  # flake8-datetimez
+    "S",    # flake8-bandit
+    "BLE",  # flake8-blind-except
+    "PL",   # Pylint
+    "ISC",  # flake8-implicit-str-concat
+    "ICN",  # flake8-import-conventions
+    "TID",  # flake8-tidy-imports
+]
+ignore = [
+    "E501",   # long strings; the formatter owns code wrapping
+    "EM101",  # message variables keep the error taxonomy in one place
+    "EM102",
+    "TRY003", # errors are raised with structured fields, not one long literal
+    "ANN401", # YAML boundary values are deliberately Any
+    "D101",   # Pydantic models are documented by their field descriptions
+    "D102",
+    "D105",
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.pylint]
+max-args = 6  # parse context travels together through the corpus validators
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = [
+    "D",
+    "S101",
+    "S105",
+    "S106",
+    "PLR2004",
+    "TRY003",
+]
+"src/atlas_review/corpus/normalize.py" = ["ARG002"]  # jmespath passes unused attrs
+"src/atlas_review/config.py" = ["S105"]  # "token" appears in field names
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unreachable = true
+warn_unused_configs = true
+show_error_codes = true
+files = ["src", "tests"]
+
+[tool.pyright]
+include = ["src", "tests"]
+pythonVersion = "3.12"
+typeCheckingMode = "strict"
+reportMissingTypeStubs = false
+# Third-party stubs (yaml, jmespath, hypothesis) erase these types at the boundary.
+# mypy strict already requires explicit annotations on our own code.
+reportUnknownArgumentType = false
+reportUnknownLambdaType = false
+reportUnknownMemberType = false
+reportUnknownVariableType = false
+
+[tool.deptry]
+known_first_party = ["atlas_review"]
+
+[tool.deptry.package_module_name_map]
+pyyaml = "yaml"
