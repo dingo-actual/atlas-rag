@@ -36,6 +36,7 @@ dev = [
     "deptry>=0.25.1",
     "httpx2>=2.16.0",
     "hypothesis>=6.170.15",
+    "interrogate>=1.7.0",
     "mypy>=2.4.1",
     "pip-audit>=2.10.1",
     "pyright>=1.1.414",
@@ -44,6 +45,7 @@ dev = [
     "pytest-socket>=0.8.1",
     "ruff>=0.17.4",
     "types-pyyaml>=6.0.12.20261103",
+    "vulture>=2.16",
 ]
 
 [tool.ruff]
@@ -133,3 +135,23 @@ known_first_party = ["atlas_review"]
 
 [tool.deptry.package_module_name_map]
 pyyaml = "yaml"
+
+[tool.vulture]
+paths = ["src", "tests"]
+min_confidence = 80  # imports, unused arguments, unreachable code
+ignore_names = [
+    "attrs",      # HTMLParser handler signature
+    "exc_type",   # __exit__ signature
+    "traceback",
+]
+
+[tool.interrogate]
+# Docstring coverage. Tests are excluded: they document behavior by assertion.
+exclude = ["tests"]
+fail-under = 80  # floor to raise as docstring coverage grows
+ignore-init-method = true
+ignore-init-module = true
+ignore-magic = true
+ignore-private = true
+ignore-semiprivate = true
+verbose = 0
