@@ -18,8 +18,9 @@ _EntityKind = Literal[
 _HEX: st.SearchStrategy[str] = st.text(
     alphabet="0123456789abcdef", min_size=64, max_size=64
 )
-_TEXT = st.text(min_size=1)
-_OPTIONAL_TEXT = st.none() | st.text(min_size=1)
+_NONBLANK = st.text(min_size=1).filter(str.strip)  # validators reject blank text
+_TEXT = _NONBLANK
+_OPTIONAL_TEXT = st.none() | _NONBLANK
 _LOCATOR = st.builds(lambda body: "/" + body, st.text(min_size=0, max_size=40))
 _RELATION: st.SearchStrategy[_RelationName] = st.sampled_from(
     ["employs", "mitigates", "specializes", "achieves", "sequences"]

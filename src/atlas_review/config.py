@@ -29,6 +29,8 @@ SUPPORTED_FORMAT_MAJOR = 6
 
 
 class CorpusConfig(AppModel):
+    """ATLAS corpus source location and download limits."""
+
     default_url: RequiredText = PINNED_SOURCE_URL
     supported_format_major: int = SUPPORTED_FORMAT_MAJOR
     download_timeout_seconds: float = Field(default=60.0, gt=0, le=600)
@@ -53,6 +55,8 @@ class CorpusConfig(AppModel):
 
 
 class EmbeddingConfig(AppModel):
+    """FastEmbed embedding model settings fixed by the specification."""
+
     model_name: RequiredText = EMBEDDING_MODEL
     dimension: int = EMBEDDING_DIMENSION
     query_prefix: RequiredText = BGE_QUERY_PREFIX
@@ -83,6 +87,8 @@ class EmbeddingConfig(AppModel):
 
 
 class ChunkingConfig(AppModel):
+    """Passage window budgets applied by the chunker."""
+
     body_target_tokens: int = Field(default=192, gt=0)
     passage_max_tokens: int = Field(default=352, gt=0)
     overlap_tokens: int = Field(default=32, ge=0)
@@ -103,6 +109,8 @@ class ChunkingConfig(AppModel):
 
 
 class ContextualizationConfig(AppModel):
+    """Generated chunk-context request settings."""
+
     enabled: bool = True
     document_builder_version: RequiredText = "atlas-owner-v1"
     prompt_version: RequiredText = "chunk-context-v1"
@@ -140,6 +148,8 @@ class ContextualizationConfig(AppModel):
 
 
 class VectorIndexConfig(AppModel):
+    """USearch dense index parameters."""
+
     metric: Literal["cos"] = "cos"
     dtype: Literal["f32"] = "f32"
     connectivity: int = Field(default=16, gt=0)
@@ -149,6 +159,8 @@ class VectorIndexConfig(AppModel):
 
 
 class KeywordIndexConfig(AppModel):
+    """bm25s keyword index parameters."""
+
     implementation: Literal["bm25s"] = "bm25s"
     method: Literal["lucene"] = "lucene"
     k1: float = Field(default=1.5, gt=0)
@@ -189,6 +201,8 @@ MAX_RERANK_CANDIDATES = 128
 
 
 class RetrievalConfig(AppModel):
+    """Retrieval candidate budgets for fusion and reranking."""
+
     query_max_tokens: int = Field(default=128, gt=0)
     dense_k: int = Field(default=32, gt=0)
     exact_id_limit: int = Field(default=4, gt=0)
@@ -227,6 +241,8 @@ class RetrievalConfig(AppModel):
 
 
 class RerankerConfig(AppModel):
+    """FastEmbed cross-encoder reranker settings."""
+
     model_name: RequiredText = RERANKER_MODEL
     batch_size: int = Field(default=16, gt=0)
     threads: int = Field(default=4, ge=1)
@@ -312,11 +328,15 @@ def _is_environment_name(value: str) -> bool:
 
 
 class UiConfig(AppModel):
+    """Terminal display preferences."""
+
     page_size: int = Field(default=10, gt=0)
     color: Literal["auto", "always", "never"] = "auto"
 
 
 class AppConfig(AppModel):
+    """Complete stored workspace configuration."""
+
     schema_version: VersionTwo = 2
     corpus: CorpusConfig = Field(default_factory=CorpusConfig)
     embedding: EmbeddingConfig = Field(default_factory=EmbeddingConfig)
