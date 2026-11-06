@@ -10,4 +10,13 @@ wheels/
 .venv
 
 # Misc
+.hypothesis/*
+.mypy_cache/*
+.pi/*
+.pytest_cache/*
+.ruff_cache/*
+.vscode/*
+agent_resources/
+agent_state/
 resources/*
+AGENTS.md
