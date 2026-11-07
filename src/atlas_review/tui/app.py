@@ -16,7 +16,7 @@ from atlas_review.tui.render import (
     render_ingest_plan,
     render_inspection,
     render_preview,
-    render_search,
+    render_retrieval_trace,
 )
 
 INSPECTABLE_KINDS = ("technique", "mitigation", "case_study")
@@ -88,13 +88,15 @@ def _ingest(console: Console, session: WorkspaceSession) -> None:
 
 
 def _search(console: Console, session: WorkspaceSession) -> None:
-    """Ask for a retrieval focus and render both channels and the fusion."""
+    """Ask for a retrieval focus and render the traced local run."""
     focus = Prompt.ask("Retrieval focus", console=console)
     if not focus.strip():
         console.print("Retrieval cancelled.", style="yellow")
         return
-    console.print("loading retrieval models (first use downloads artifacts)")
-    console.print(render_search(session.search(focus)))
+    console.print(
+        "loading retrieval models and reranker (first use downloads artifacts)"
+    )
+    console.print(render_retrieval_trace(session.retrieve(focus).trace))
 
 
 def _inspect(console: Console, session: WorkspaceSession) -> None:

@@ -16,6 +16,7 @@ dependencies = [
     "pydantic>=2,<3",
     "pyyaml>=6",
     "rich>=13",
+    "rustworkx>=0.18.1",
     "tokenizers>=0.23.3",
     "usearch>=2.26.6",
 ]
@@ -115,6 +116,7 @@ max-args = 6  # parse context travels together through the corpus validators
 ]
 "src/atlas_review/corpus/normalize.py" = ["ARG002"]  # HTMLParser hooks ignore attributes
 "src/atlas_review/config.py" = ["S105"]  # "token" appears in field names
+"src/atlas_review/retrieval/pipeline.py" = ["PLR0913"]  # one run takes its loaded inputs
 
 [tool.mypy]
 python_version = "3.12"

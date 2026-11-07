@@ -6,9 +6,16 @@ from pathlib import Path
 
 from rich.console import Console, RenderableType
 
-from atlas_review.contracts import Candidate, Passage
+from atlas_review.contracts import (
+    Candidate,
+    ChannelHit,
+    GraphHop,
+    GraphPath,
+    GraphSeed,
+    RetrievalTrace,
+    StageTiming,
+)
 from atlas_review.corpus.ingest import IngestionOutcome, IngestionPlan
-from atlas_review.retrieval.hybrid import SearchOutcome
 from atlas_review.services.ingestion import preview_source
 from atlas_review.services.session import WorkspaceSession
 from atlas_review.tui.render import (
@@ -17,7 +24,7 @@ from atlas_review.tui.render import (
     render_ingest_plan,
     render_inspection,
     render_preview,
-    render_search,
+    render_retrieval_trace,
     sanitize_terminal_text,
 )
 
@@ -121,49 +128,6 @@ OUTCOME = IngestionOutcome(
     artifact_directory="indexes/generation-1-bundle",
 )
 
-PASSAGE = Passage(
-    schema_version=1,
-    passage_id=7,
-    generation_id="generation-1",
-    entity_id="AML.T0051.001",
-    owner_kind="technique",
-    section="description",
-    ordinal=0,
-    bm25_ordinal=0,
-    header="Technique AML.T0051.001 | LLM Prompt Injection\x1b[2J",
-    source_text="Source text about prompt injection.",
-    context_text="Generated note.",
-    retrieval_text="Technique AML.T0051.001\nContext (generated):\nGenerated note.",
-    context_cache_key="b" * 64,
-    source_sha256="c" * 64,
-    content_sha256="d" * 64,
-    embedding_tokens=12,
-    reranker_tokens=13,
-    source_locator="/techniques/AML.T0051.001/description",
-    source_start=0,
-    source_end=36,
-)
-
-SEARCH = SearchOutcome(
-    generation_id="generation-1",
-    collection_version="2026.09",
-    focus="indirect prompt injection\x1b[31m",
-    dense_hits=((7, 0.12),),
-    keyword_hits=((7, 2.5),),
-    candidates=(
-        Candidate(
-            passage_id=7,
-            channels=["dense", "bm25"],
-            dense_rank=1,
-            dense_distance=0.12,
-            bm25_rank=1,
-            bm25_score=2.5,
-            fusion_score=0.032,
-        ),
-    ),
-    passages=(PASSAGE,),
-)
-
 
 class TestBuildRendering:
     """The plan and the activation summary stay sanitized and explicit."""
@@ -200,27 +164,105 @@ class TestBuildRendering:
         assert "12" in rendered
 
 
-class TestSearchRendering:
-    """Search output separates the channels from the fused ranking."""
+TRACE = RetrievalTrace(
+    schema_version=1,
+    generation_id="generation-1",
+    collection_version="2026.09",
+    settings_fingerprint="a" * 64,
+    started_at="2026-11-01T00:00:00+00:00",
+    focus="indirect prompt injection\x1b[31m",
+    query_tokens=9,
+    stage_timings=[
+        StageTiming(stage="model_load", seconds=0.5),
+        StageTiming(stage="rerank", seconds=0.02),
+    ],
+    dense_hits=[ChannelHit(passage_id=7, rank=1, value=0.12)],
+    keyword_hits=[ChannelHit(passage_id=7, rank=1, value=2.5)],
+    graph_seeds=[
+        GraphSeed(
+            entity_id="AML.T0051.001",
+            origin="exact_id",
+            fused_rank=None,
+            channels=["exact_id"],
+        )
+    ],
+    graph_paths=[
+        GraphPath(
+            seed_entity_id="AML.T0051.001",
+            entity_id="AML.M0033",
+            hops=[
+                GraphHop(
+                    edge_id="e" * 64,
+                    source_id="AML.T0051.001",
+                    target_id="AML.T0051",
+                    relation="specializes",
+                    traversed_inverse=False,
+                ),
+                GraphHop(
+                    edge_id="f" * 64,
+                    source_id="AML.M0033",
+                    target_id="AML.T0051",
+                    relation="mitigates",
+                    traversed_inverse=True,
+                ),
+            ],
+        )
+    ],
+    direct_candidate_count=1,
+    graph_candidate_count=1,
+    candidates=[
+        Candidate(
+            passage_id=7,
+            channels=["dense", "bm25"],
+            dense_rank=1,
+            dense_distance=0.12,
+            bm25_rank=1,
+            bm25_score=2.5,
+            fusion_score=0.032,
+            reranker_score=0.75,
+            selected=True,
+        )
+    ],
+    evidence_ids=["E001"],
+    exclusions=["p9: evidence budget"],
+    limits_reached=["graph_max_edges"],
+    missing_categories=["No mitigation description included"],
+    provenance=[],
+)
 
-    def test_search_renders_both_channels_and_fusion(self) -> None:
-        rendered = _text(render_search(SEARCH))
+
+class TestTraceRendering:
+    """The trace shows seeds, typed paths, ranking, and coverage gaps."""
+
+    def test_trace_renders_paths_without_escapes(self) -> None:
+        rendered = _text(render_retrieval_trace(TRACE))
+        assert "Retrieval trace" in rendered
         assert "Dense channel" in rendered
         assert "Keyword channel" in rendered
-        assert "Fused candidates" in rendered
+        assert "Reranked candidates" in rendered
         assert "dense+bm25" in rendered
         assert "AML.T0051.001" in rendered
+        assert "specializes" in rendered
+        assert "mitigates" in rendered
+        assert "0.7500" in rendered
+        assert "yes" in rendered
+        assert "graph_max_edges" in rendered
+        assert "excluded: p9: evidence budget" in rendered
+        assert "model_load=0.500" in rendered
+        assert "keyword zero-score exclusions: 0" in rendered
         assert "\x1b" not in rendered
 
-    def test_empty_channels_are_reported(self) -> None:
-        empty = SearchOutcome(
+    def test_empty_trace_states_no_expansion(self) -> None:
+        empty = RetrievalTrace(
+            schema_version=1,
             generation_id="generation-1",
             collection_version="2026.09",
+            settings_fingerprint="a" * 64,
+            started_at="2026-11-01T00:00:00+00:00",
             focus="nothing matches",
-            dense_hits=(),
-            keyword_hits=(),
-            candidates=(),
-            passages=(),
+            query_tokens=2,
         )
-        rendered = _text(render_search(empty))
+        rendered = _text(render_retrieval_trace(empty))
+        assert "no graph expansion" in rendered
         assert "no candidates" in rendered
+        assert "evidence: none" in rendered

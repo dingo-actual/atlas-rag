@@ -134,6 +134,29 @@ class FixedContextualizer:
         )
 
 
+@dataclass(slots=True)
+class RecordingReranker:
+    """Score query-document pairs deterministically and record every call.
+
+    When ``scores`` is set the prepared scores are returned unchanged, which
+    lets a test exercise alignment, mismatch, and non-finite handling. Otherwise
+    the score is the number of lowercased words shared by query and document.
+    """
+
+    scores: tuple[float, ...] | None = None
+    calls: list[tuple[str, tuple[str, ...]]] = field(default_factory=list)
+
+    def score(self, query: str, documents: Sequence[str]) -> list[float]:
+        """Return one relevance score per document in input order."""
+        self.calls.append((query, tuple(documents)))
+        if self.scores is not None:
+            return list(self.scores)
+        terms = set(query.lower().split())
+        return [
+            float(len(terms & set(document.lower().split()))) for document in documents
+        ]
+
+
 def stream_chunks(
     pieces: Sequence[str],
     *,

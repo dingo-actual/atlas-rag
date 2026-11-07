@@ -232,6 +232,7 @@ class TestBundleIntegrity:
             passages={},
             dense_index=loaded.dense_index,
             keyword_index=loaded.keyword_index,
+            graph=loaded.graph,
         )
         with pytest.raises(AtlasReviewError) as caught:
             search(broken, RecordingEmbedder(), session.config, "prompt injection")

@@ -17,6 +17,7 @@ from atlas_review.retrieval.artifacts import (
     decode_passage_ids,
     load_artifact_manifest,
 )
+from atlas_review.retrieval.graph_index import AtlasGraph, build_graph
 from atlas_review.retrieval.keyword_index import load_keyword_index
 from atlas_review.retrieval.vector_index import restore_dense_index
 from atlas_review.storage.passages import PassageRepository
@@ -34,6 +35,7 @@ class LoadedGeneration:
         passages (dict[int, Passage]): Passage records by identifier.
         dense_index (Index): Restored USearch index.
         keyword_index (bm25s.BM25): Restored bm25s index.
+        graph (AtlasGraph): Reconstructed ATLAS entity graph.
     """
 
     generation_id: str
@@ -42,6 +44,7 @@ class LoadedGeneration:
     passages: dict[int, Passage]
     dense_index: Index
     keyword_index: bm25s.BM25
+    graph: AtlasGraph
 
 
 def load_generation(
@@ -118,6 +121,9 @@ def load_generation(
         passages=by_id,
         dense_index=dense,
         keyword_index=keyword,
+        graph=build_graph(
+            repository.entities(generation_id), repository.edges(generation_id)
+        ),
     )
 
 

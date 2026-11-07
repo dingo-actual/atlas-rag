@@ -376,6 +376,48 @@ class CorpusRepository:
             raise _unknown_entity(entity_id)
         return decode_model(row["payload_msgpack"], AtlasEntity)
 
+    def entities(self, generation_id: str) -> tuple[AtlasEntity, ...]:
+        """Return every stored entity of one generation in stable order.
+
+        Args:
+            generation_id (str): Stored generation identifier.
+
+        Returns:
+            (tuple[AtlasEntity, ...]) Validated entities ordered by identifier.
+        """
+        rows = (
+            self._database.connect()
+            .execute(
+                "SELECT payload_msgpack FROM entities WHERE generation_id = ? "
+                "ORDER BY entity_id",
+                (generation_id,),
+            )
+            .fetchall()
+        )
+        return tuple(decode_model(row["payload_msgpack"], AtlasEntity) for row in rows)
+
+    def edges(self, generation_id: str) -> tuple[AtlasRelationship, ...]:
+        """Return every stored relationship edge of one generation.
+
+        Args:
+            generation_id (str): Stored generation identifier.
+
+        Returns:
+            (tuple[AtlasRelationship, ...]) Validated edges ordered by ID.
+        """
+        rows = (
+            self._database.connect()
+            .execute(
+                "SELECT payload_msgpack FROM edges WHERE generation_id = ? "
+                "ORDER BY edge_id",
+                (generation_id,),
+            )
+            .fetchall()
+        )
+        return tuple(
+            decode_model(row["payload_msgpack"], AtlasRelationship) for row in rows
+        )
+
     def inspect(self, generation_id: str, entity_id: str) -> EntityInspection:
         """Return one entity together with both relationship directions."""
         entity = self.entity(generation_id, entity_id)

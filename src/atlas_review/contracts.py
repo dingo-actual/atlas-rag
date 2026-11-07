@@ -44,6 +44,13 @@ Explanation = Annotated[str, Field(min_length=1, max_length=2000)]
 BriefItems = Annotated[list[ShortText], Field(max_length=20)]
 Sha256Hex = Annotated[str, Field(pattern=_SHA256_PATTERN)]
 OwnerKind = Literal["technique", "mitigation", "case_study"]
+EntityKind = Literal[
+    "collection", "matrix", "tactic", "technique", "mitigation", "case_study"
+]
+RelationName = Literal["employs", "mitigates", "specializes", "achieves", "sequences"]
+SearchChannel = Literal["dense", "bm25", "graph", "exact_id"]
+EvidenceChannel = Literal["dense", "bm25", "graph", "exact_id", "graph_connector"]
+PassageId = Annotated[int, Field(gt=0, lt=2**63)]
 
 
 class AppModel(BaseModel):
@@ -175,9 +182,7 @@ class AtlasEntity(AppModel):
 
     generation_id: RequiredText
     entity_id: RequiredText
-    kind: Literal[
-        "collection", "matrix", "tactic", "technique", "mitigation", "case_study"
-    ]
+    kind: EntityKind
     name: RequiredText
     display_name: RequiredText
     description: RequiredText
@@ -227,7 +232,7 @@ class AtlasRelationship(AppModel):
 
     generation_id: RequiredText
     edge_id: Sha256Hex
-    relation: Literal["employs", "mitigates", "specializes", "achieves", "sequences"]
+    relation: RelationName
     source_id: RequiredText
     target_id: RequiredText
     description: str | None = None
@@ -350,25 +355,153 @@ class Passage(AppModel):
         return self
 
 
+class GraphHop(AppModel):
+    """One traversed ATLAS edge inside a graph path."""
+
+    edge_id: RequiredText
+    source_id: RequiredText
+    target_id: RequiredText
+    relation: RelationName
+    traversed_inverse: bool
+
+
+class GraphPath(AppModel):
+    """Ordered traversal from a seed entity to a resulting entity."""
+
+    seed_entity_id: RequiredText
+    hops: Annotated[list[GraphHop], Field(min_length=1)]
+    entity_id: RequiredText
+
+
+class GraphSeed(AppModel):
+    """One entity the bounded graph expansion started from."""
+
+    entity_id: RequiredText
+    origin: Literal["exact_id", "fused"]
+    fused_rank: int | None = Field(default=None, gt=0)
+    channels: Annotated[list[EvidenceChannel], Field(min_length=1)]
+
+
+class ChannelHit(AppModel):
+    """One passage position in an initial search channel."""
+
+    passage_id: PassageId
+    rank: int = Field(gt=0)
+    value: float = Field(ge=0)
+
+
+class PassageProvenance(AppModel):
+    """Recorded hashes for one passage used as evidence."""
+
+    passage_id: PassageId
+    source_sha256: Sha256Hex
+    context_cache_key: Sha256Hex
+    content_sha256: Sha256Hex
+
+
 class Candidate(AppModel):
     """One passage considered by retrieval, with per-channel provenance."""
 
-    passage_id: int = Field(gt=0, lt=2**63)
-    channels: Annotated[list[Literal["dense", "bm25"]], Field(min_length=1)]
+    passage_id: PassageId
+    channels: Annotated[list[SearchChannel], Field(min_length=1)]
     dense_rank: int | None = Field(default=None, gt=0)
     dense_distance: float | None = Field(default=None, ge=0)
     bm25_rank: int | None = Field(default=None, gt=0)
     bm25_score: float | None = Field(default=None, ge=0)
     fusion_score: float = Field(ge=0)
+    graph_paths: list[GraphPath] = Field(default_factory=list)
+    reranker_score: float | None = None
+    selected: bool | None = None
 
     @field_validator("channels")
     @classmethod
     def require_unique_channels(
-        cls, values: list[Literal["dense", "bm25"]]
-    ) -> list[Literal["dense", "bm25"]]:
+        cls, values: list[SearchChannel]
+    ) -> list[SearchChannel]:
         if len(set(values)) != len(values):
             raise ValueError("channels must not repeat")
         return values
+
+
+class EvidenceItem(AppModel):
+    """One original-source evidence unit or structural connector card."""
+
+    evidence_id: RequiredText
+    item_kind: Literal["passage", "relationship"]
+    entity_ids: Annotated[list[RequiredText], Field(min_length=1)]
+    passage_id: PassageId | None = None
+    edge_id: Sha256Hex | None = None
+    text: RequiredText
+    source_locator: RequiredText
+    collection_version: RequiredText
+    case_type: str | None = None
+    retrieval_channels: Annotated[list[EvidenceChannel], Field(min_length=1)]
+    graph_path: GraphPath | None = None
+
+    @field_validator("source_locator")
+    @classmethod
+    def require_locator(cls, value: str) -> str:
+        return _require_absolute_locator(value)
+
+
+class AllowedAssociation(AppModel):
+    """One source relationship the review may cite inside the packet."""
+
+    source_id: RequiredText
+    source_kind: Literal["case_study", "mitigation"]
+    technique_id: RequiredText
+    parent_technique_id: str | None = None
+    edge_ids: Annotated[list[RequiredText], Field(min_length=1)]
+    evidence_ids: Annotated[list[RequiredText], Field(min_length=1)]
+
+
+class EvidencePacket(AppModel):
+    """Frozen original-source evidence plus its citation allowlists."""
+
+    schema_version: VersionOne
+    generation_id: RequiredText
+    collection_version: RequiredText
+    items: list[EvidenceItem] = Field(default_factory=list)
+    allowed_entity_ids_by_kind: dict[OwnerKind, list[RequiredText]] = Field(
+        default_factory=dict
+    )
+    allowed_associations: list[AllowedAssociation] = Field(default_factory=list)
+
+
+class StageTiming(AppModel):
+    """One retrieval stage and its monotonic-clock duration."""
+
+    stage: RequiredText
+    seconds: float = Field(ge=0)
+
+
+class RetrievalTrace(AppModel):
+    """Diagnostic record of one local retrieval run."""
+
+    schema_version: VersionOne
+    generation_id: RequiredText
+    collection_version: RequiredText
+    settings_fingerprint: Sha256Hex
+    started_at: RequiredText
+    focus: RequiredText
+    query_tokens: int = Field(gt=0)
+    stage_timings: list[StageTiming] = Field(default_factory=list)
+    dense_hits: list[ChannelHit] = Field(default_factory=list)
+    keyword_hits: list[ChannelHit] = Field(default_factory=list)
+    keyword_zero_score_exclusions: int = Field(default=0, ge=0)
+    fused_candidates: list[Candidate] = Field(default_factory=list)
+    graph_seeds: list[GraphSeed] = Field(default_factory=list)
+    graph_paths: list[GraphPath] = Field(default_factory=list)
+    direct_candidate_count: int = Field(default=0, ge=0)
+    direct_quota_before_dedup: int = Field(default=0, ge=0)
+    graph_candidate_count: int = Field(default=0, ge=0)
+    graph_quota_before_dedup: int = Field(default=0, ge=0)
+    candidates: list[Candidate] = Field(default_factory=list)
+    evidence_ids: list[RequiredText] = Field(default_factory=list)
+    exclusions: list[RequiredText] = Field(default_factory=list)
+    limits_reached: list[RequiredText] = Field(default_factory=list)
+    missing_categories: list[RequiredText] = Field(default_factory=list)
+    provenance: list[PassageProvenance] = Field(default_factory=list)
 
 
 class ChunkingIdentity(AppModel):

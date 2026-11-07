@@ -8,9 +8,16 @@ from pathlib import Path
 import pytest
 
 from atlas_review.corpus.atlas_v6 import ParsedCorpus, parse_source
+from atlas_review.corpus.ingest import BuildServices, run_ingestion
+from atlas_review.retrieval.loader import LoadedGeneration, load_generation
 from atlas_review.retrieval.tokenizers import TokenCounters
 from atlas_review.services.session import WorkspaceSession
-from fakes import FixedContextualizer, RecordingEmbedder, WhitespaceTokenCounter
+from fakes import (
+    FixedContextualizer,
+    RecordingEmbedder,
+    RecordingReranker,
+    WhitespaceTokenCounter,
+)
 
 ACQUIRED_AT = "2026-11-01T00:00:00+00:00"
 
@@ -76,3 +83,53 @@ def embedder() -> RecordingEmbedder:
 def contextualizer() -> FixedContextualizer:
     """Return a fixed chunk contextualizer."""
     return FixedContextualizer()
+
+
+@pytest.fixture
+def reranker() -> RecordingReranker:
+    """Return a recording, deterministic cross-encoder stand-in."""
+    return RecordingReranker()
+
+
+@pytest.fixture
+def fake_session(
+    workspace_root: Path, counters: TokenCounters, embedder: RecordingEmbedder
+) -> Iterator[WorkspaceSession]:
+    """Return an open session bound to the deterministic model fakes."""
+    opened = WorkspaceSession(workspace_root, counters=counters, embedding=embedder)
+    try:
+        yield opened
+    finally:
+        opened.close()
+
+
+@pytest.fixture
+def loaded_generation(
+    fake_session: WorkspaceSession,
+    corpus: ParsedCorpus,
+    counters: TokenCounters,
+    embedder: RecordingEmbedder,
+    contextualizer: FixedContextualizer,
+) -> LoadedGeneration:
+    """Build the fixture generation once and return its verified bundle."""
+    run_ingestion(
+        corpus,
+        source_bytes=b"fixture",
+        services=BuildServices(
+            config=fake_session.config,
+            repository=fake_session.repository,
+            passages=fake_session.passages,
+            indexes_dir=fake_session.paths.indexes,
+            counters=counters,
+            backend=embedder,
+            contextualizer=contextualizer,
+            progress=None,
+        ),
+    )
+    return load_generation(
+        fake_session.repository,
+        passages=fake_session.passages,
+        indexes_dir=fake_session.paths.indexes,
+        config=fake_session.config,
+        generation_id=fake_session.require_ready_generation_id(),
+    )

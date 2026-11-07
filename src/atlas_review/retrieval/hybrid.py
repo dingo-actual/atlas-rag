@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
 
 from atlas_review.config import AppConfig
-from atlas_review.contracts import Candidate, Passage
+from atlas_review.contracts import Candidate, Passage, SearchChannel
 from atlas_review.errors import STAGE_RETRIEVAL, AtlasReviewError
 from atlas_review.retrieval.embeddings import EmbeddingBackend, query_vector
 from atlas_review.retrieval.keyword_index import keyword_search
@@ -27,6 +26,7 @@ class SearchOutcome:
         focus (str): Retrieval focus used for both channels.
         dense_hits (Hits): ``(passage_id, distance)`` in dense order.
         keyword_hits (Hits): ``(passage_id, score)`` in BM25 order.
+        keyword_zero_score_exclusions (int): Dropped zero-score keyword results.
         candidates (tuple[Candidate, ...]): Fused candidates, best first.
         passages (tuple[Passage, ...]): Passages in fused candidate order.
     """
@@ -36,6 +36,7 @@ class SearchOutcome:
     focus: str
     dense_hits: Hits
     keyword_hits: Hits
+    keyword_zero_score_exclusions: int
     candidates: tuple[Candidate, ...]
     passages: tuple[Passage, ...]
 
@@ -93,13 +94,14 @@ def search(
         count=config.retrieval.dense_k,
         threads=config.vector_index.threads,
     )
-    keyword_hits = keyword_search(
+    keyword = keyword_search(
         loaded.keyword_index,
         focus,
         limit=config.retrieval.bm25_k,
         passage_ids_by_ordinal=loaded.passage_ids,
         config=config.keyword_index,
     )
+    keyword_hits = keyword.hits
     known = set(loaded.passages)
     for passage_id, _ in (*dense_hits, *keyword_hits):
         if passage_id not in known:
@@ -114,6 +116,7 @@ def search(
         focus=focus,
         dense_hits=dense_hits,
         keyword_hits=keyword_hits,
+        keyword_zero_score_exclusions=keyword.zero_score_exclusions,
         candidates=candidates,
         passages=tuple(
             loaded.passages[candidate.passage_id] for candidate in candidates
@@ -152,7 +155,7 @@ def fuse(dense_hits: Hits, keyword_hits: Hits, *, rrf_k: int) -> tuple[Candidate
             score += 1.0 / (rrf_k + dense_rank[passage_id])
         if passage_id in keyword_rank:
             score += 1.0 / (rrf_k + keyword_rank[passage_id])
-        channels: list[Literal["dense", "bm25"]] = []
+        channels: list[SearchChannel] = []
         if passage_id in dense_rank:
             channels.append("dense")
         if passage_id in keyword_rank:

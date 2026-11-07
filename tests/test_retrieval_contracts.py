@@ -181,7 +181,7 @@ def test_edge_owned_passage_accepts_an_edge_owner() -> None:
     [
         pytest.param({"channels": []}, "channels", id="no-channel"),
         pytest.param({"channels": ["dense", "dense"]}, "channels", id="duplicates"),
-        pytest.param({"channels": ["graph"]}, "channels", id="unknown-channel"),
+        pytest.param({"channels": ["ranked"]}, "channels", id="unknown-channel"),
         pytest.param({"dense_rank": 0}, "dense_rank", id="zero-rank"),
         pytest.param({"fusion_score": -0.1}, "fusion_score", id="negative-fusion"),
     ],

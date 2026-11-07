@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
@@ -12,6 +13,21 @@ import numpy as np
 
 from atlas_review.config import KeywordIndexConfig
 from atlas_review.errors import STAGE_INDEX, AtlasReviewError
+
+Hits = tuple[tuple[int, float], ...]
+
+
+@dataclass(frozen=True, slots=True)
+class KeywordSearch:
+    """Positive-score keyword hits and the zero-score results dropped.
+
+    Instance Attributes:
+        hits (Hits): ``(passage_id, score)`` in descending score order.
+        zero_score_exclusions (int): Returned filler results with score zero.
+    """
+
+    hits: Hits
+    zero_score_exclusions: int
 
 
 def lexical_tokens(texts: Sequence[str], config: KeywordIndexConfig) -> list[list[str]]:
@@ -118,7 +134,7 @@ def keyword_search(
     limit: int,
     passage_ids_by_ordinal: Sequence[int],
     config: KeywordIndexConfig,
-) -> tuple[tuple[int, float], ...]:
+) -> KeywordSearch:
     """Search BM25 and resolve document positions through the stored mapping.
 
     Args:
@@ -129,7 +145,7 @@ def keyword_search(
         config (KeywordIndexConfig): Analyzer settings for the query.
 
     Returns:
-        (tuple[tuple[int, float], ...]) Positive-score hits, best first.
+        (KeywordSearch) Positive-score hits, best first, and the dropped count.
 
     Raises:
         AtlasReviewError: The mapping, ordinals, or scores are invalid.
@@ -138,7 +154,7 @@ def keyword_search(
     tokens = lexical_tokens([focus], config)
     count = min(limit, len(mapping))
     if count <= 0 or not tokens[0]:
-        return ()
+        return KeywordSearch((), 0)
     results = index.retrieve(
         tokens,
         k=count,
@@ -152,6 +168,7 @@ def keyword_search(
             "invalid_keyword_result", "keyword search returned an unexpected shape"
         )
     hits: list[tuple[int, float]] = []
+    dropped = 0
     for ordinal, score in zip(documents[0], scores[0], strict=True):
         position = int(ordinal)
         if not 0 <= position < len(mapping):
@@ -166,7 +183,11 @@ def keyword_search(
             )
         if value > 0.0:
             hits.append((mapping[position], value))
-    return tuple(sorted(hits, key=lambda hit: (-hit[1], hit[0])))
+        else:
+            dropped += 1
+    return KeywordSearch(
+        tuple(sorted(hits, key=lambda hit: (-hit[1], hit[0]))), dropped
+    )
 
 
 def verify_saved_settings(directory: Path, config: KeywordIndexConfig) -> None:

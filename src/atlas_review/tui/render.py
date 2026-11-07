@@ -14,9 +14,15 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from atlas_review.contracts import AtlasEntity, AtlasRelationship
+from atlas_review.contracts import (
+    AtlasEntity,
+    AtlasRelationship,
+    Candidate,
+    GraphPath,
+    RetrievalTrace,
+    StageTiming,
+)
 from atlas_review.corpus.ingest import IngestionOutcome, IngestionPlan
-from atlas_review.retrieval.hybrid import SearchOutcome
 from atlas_review.services.ingestion import SourcePreview
 from atlas_review.storage.repository import EntityInspection, GenerationSummary
 
@@ -190,29 +196,6 @@ def render_build_outcome(outcome: IngestionOutcome) -> Panel:
     return Panel(table, title="Ingestion complete", border_style="green")
 
 
-def render_search(outcome: SearchOutcome) -> RenderableType:
-    """Render both search channels and the fused candidate list.
-
-    Args:
-        outcome (SearchOutcome): Channel hits, fused candidates, and passages.
-
-    Returns:
-        (RenderableType) Grouped tables for one retrieval run.
-    """
-    header = Table.grid(padding=(0, 2))
-    header.add_column(style="bold cyan", no_wrap=True)
-    header.add_column(overflow="fold")
-    header.add_row("generation", outcome.generation_id)
-    header.add_row("collection", sanitize_terminal_text(outcome.collection_version))
-    header.add_row("focus", sanitize_terminal_text(outcome.focus))
-    return Group(
-        Panel(header, title="Retrieval", border_style="cyan"),
-        _channel_table("Dense channel", outcome.dense_hits, "distance"),
-        _channel_table("Keyword channel", outcome.keyword_hits, "score"),
-        _fused_table(outcome),
-    )
-
-
 def _channel_table(
     title: str, hits: Sequence[tuple[int, float]], label: str
 ) -> RenderableType:
@@ -230,29 +213,133 @@ def _channel_table(
     return Panel(table, border_style="blue")
 
 
-def _fused_table(outcome: SearchOutcome) -> RenderableType:
-    """Render fused candidates with their passage headers."""
-    if not outcome.candidates:
+def render_retrieval_trace(trace: RetrievalTrace) -> RenderableType:
+    """Render one local retrieval run: seeds, paths, ranking, and evidence.
+
+    Args:
+        trace (RetrievalTrace): Validated diagnostic record of the run.
+
+    Returns:
+        (RenderableType) Grouped tables for channels, graph, and evidence.
+    """
+    header = Table.grid(padding=(0, 2))
+    header.add_column(style="bold cyan", no_wrap=True)
+    header.add_column(overflow="fold")
+    header.add_row("generation", trace.generation_id)
+    header.add_row("collection", sanitize_terminal_text(trace.collection_version))
+    header.add_row("settings", trace.settings_fingerprint[:12])
+    header.add_row("started", sanitize_terminal_text(trace.started_at))
+    header.add_row("focus", sanitize_terminal_text(trace.focus))
+    header.add_row("query tokens", str(trace.query_tokens))
+    header.add_row("stage seconds", _timings(trace.stage_timings))
+    header.add_row(
+        "direct candidates",
+        f"{trace.direct_candidate_count} of {trace.direct_quota_before_dedup} offered",
+    )
+    header.add_row(
+        "graph candidates",
+        f"{trace.graph_candidate_count} of {trace.graph_quota_before_dedup} offered",
+    )
+    return Group(
+        Panel(header, title="Retrieval trace", border_style="cyan"),
+        _channel_table(
+            "Dense channel",
+            [(hit.passage_id, hit.value) for hit in trace.dense_hits],
+            "distance",
+        ),
+        _channel_table(
+            "Keyword channel",
+            [(hit.passage_id, hit.value) for hit in trace.keyword_hits],
+            "score",
+        ),
+        _path_table(trace.graph_paths),
+        _candidate_table(trace.candidates),
+        _notes_panel(trace),
+    )
+
+
+def _timings(timings: Sequence[StageTiming]) -> str:
+    """Render stage durations as a compact one-line list."""
+    if not timings:
+        return "none"
+    return ", ".join(f"{timing.stage}={timing.seconds:.3f}" for timing in timings)
+
+
+def _path_table(paths: Sequence[GraphPath]) -> RenderableType:
+    """Render each discovered seed-to-entity path as a readable walk."""
+    if not paths:
+        return Panel(
+            Text("no graph expansion", style="dim"),
+            title="Graph paths",
+            border_style="blue",
+        )
+    table = Table(title="Graph paths", title_justify="left")
+    table.add_column("seed")
+    table.add_column("hops")
+    table.add_column("reached")
+    for path in paths:
+        walk = " -> ".join(
+            [path.seed_entity_id]
+            + [
+                f"{'<-' if hop.traversed_inverse else '-'}{hop.relation}->"
+                f" {hop.source_id if hop.traversed_inverse else hop.target_id}"
+                for hop in path.hops
+            ]
+        )
+        table.add_row(
+            sanitize_terminal_text(path.seed_entity_id),
+            Text(walk, overflow="fold"),
+            sanitize_terminal_text(path.entity_id),
+        )
+    return Panel(table, border_style="blue")
+
+
+def _candidate_table(candidates: Sequence[Candidate]) -> RenderableType:
+    """Render the reranked pool with channel and selection provenance."""
+    if not candidates:
         return Panel(
             Text("no candidates", style="dim"),
-            title="Fused candidates",
+            title="Reranked candidates",
             border_style="yellow",
         )
-    table = Table(title="Fused candidates", title_justify="left", show_lines=True)
-    headers = ("rank", "passage", "channels", "fusion", "header")
-    for header in headers:
+    table = Table(title="Reranked candidates", title_justify="left")
+    for header in ("rank", "passage", "channels", "score", "selected", "graph"):
         table.add_column(header, overflow="fold")
-    for rank, (candidate, passage) in enumerate(
-        zip(outcome.candidates, outcome.passages, strict=True), start=1
-    ):
+    for rank, candidate in enumerate(candidates, start=1):
+        score = (
+            f"{candidate.reranker_score:.4f}"
+            if candidate.reranker_score is not None
+            else "-"
+        )
+        graph = "; ".join(
+            " -> ".join([path.seed_entity_id, *(hop.edge_id[:8] for hop in path.hops)])
+            for path in candidate.graph_paths
+        )
         table.add_row(
             str(rank),
             str(candidate.passage_id),
             "+".join(candidate.channels),
-            f"{candidate.fusion_score:.5f}",
-            _wrapped(passage.header),
+            score,
+            "yes" if candidate.selected else "no",
+            Text(graph or "-", overflow="fold"),
         )
     return Panel(table, border_style="yellow")
+
+
+def _notes_panel(trace: RetrievalTrace) -> RenderableType:
+    """Render evidence identifiers, exclusions, caps, and coverage gaps."""
+    body = [
+        f"evidence: {', '.join(trace.evidence_ids) or 'none'}",
+        f"keyword zero-score exclusions: {trace.keyword_zero_score_exclusions}",
+        f"limits reached: {', '.join(trace.limits_reached) or 'none'}",
+        f"coverage gaps: {'; '.join(trace.missing_categories) or 'none'}",
+    ]
+    body.extend(f"excluded: {line}" for line in trace.exclusions)
+    return Panel(
+        Text("\n".join(body), overflow="fold"),
+        title="Evidence",
+        border_style="green",
+    )
 
 
 def _counts(counts: Sequence[tuple[str, int]]) -> str:

@@ -183,38 +183,52 @@ class TestKeywordIndex:
         index = build_keyword_index(TEXTS, CONFIG.keyword_index)
         save_keyword_index(index, tmp_path / "keyword", CONFIG.keyword_index)
         loaded = load_keyword_index(tmp_path / "keyword")
-        hits = keyword_search(
+        found = keyword_search(
             loaded,
             "indirect prompt injection aml.cs0035",
             limit=3,
             passage_ids_by_ordinal=passage_ids,
             config=CONFIG.keyword_index,
         )
+        hits = found.hits
         assert hits[0][0] == 42
         assert hits[0][1] > 0.0
         assert all(score > 0.0 for _, score in hits)
+        assert found.zero_score_exclusions == 1
 
     def test_out_of_vocabulary_query_returns_no_candidates(self) -> None:
         index = build_keyword_index(TEXTS, CONFIG.keyword_index)
-        hits = keyword_search(
+        found = keyword_search(
             index,
             "zzzz",
             limit=3,
             passage_ids_by_ordinal=(1, 2, 3),
             config=CONFIG.keyword_index,
         )
-        assert hits == ()
+        assert found.hits == ()
+
+    def test_zero_score_filler_results_are_counted_and_dropped(self) -> None:
+        index = build_keyword_index(TEXTS, CONFIG.keyword_index)
+        found = keyword_search(
+            index,
+            "prompt",
+            limit=3,
+            passage_ids_by_ordinal=(1, 2, 3),
+            config=CONFIG.keyword_index,
+        )
+        assert all(score > 0.0 for _, score in found.hits)
+        assert found.zero_score_exclusions == 3 - len(found.hits)
 
     def test_empty_query_tokens_return_no_candidates(self) -> None:
         index = build_keyword_index(TEXTS, CONFIG.keyword_index)
-        hits = keyword_search(
+        found = keyword_search(
             index,
             "",
             limit=3,
             passage_ids_by_ordinal=(1, 2, 3),
             config=CONFIG.keyword_index,
         )
-        assert hits == ()
+        assert found.hits == ()
 
     def test_ordinal_mapping_must_cover_the_index(self) -> None:
         index = build_keyword_index(TEXTS, CONFIG.keyword_index)

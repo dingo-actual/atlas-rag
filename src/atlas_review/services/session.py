@@ -6,6 +6,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from time import monotonic
 
 from atlas_review.config import AppConfig
 from atlas_review.corpus.atlas_v6 import ParsedCorpus
@@ -21,6 +22,8 @@ from atlas_review.inference.client import build_contextualizer
 from atlas_review.retrieval.embeddings import EmbeddingBackend, FastEmbedBackend
 from atlas_review.retrieval.hybrid import SearchOutcome, check_focus, search
 from atlas_review.retrieval.loader import load_generation
+from atlas_review.retrieval.pipeline import RetrievalRun, retrieve
+from atlas_review.retrieval.rerank import FastEmbedReranker, Reranker
 from atlas_review.retrieval.tokenizers import TokenCounters, load_token_counters
 from atlas_review.services.ingestion import (
     IngestionOutcome,
@@ -102,6 +105,7 @@ class WorkspaceSession:
         *,
         counters: TokenCounters | None = None,
         embedding: EmbeddingBackend | None = None,
+        reranker: Reranker | None = None,
     ) -> None:
         """Open the workspace and load or initialise its configuration.
 
@@ -109,6 +113,7 @@ class WorkspaceSession:
             root (Path): Workspace directory supplied by ``--workspace``.
             counters (TokenCounters | None): Injected retrieval tokenizers.
             embedding (EmbeddingBackend | None): Injected embedding backend.
+            reranker (Reranker | None): Injected cross-encoder backend.
         """
         self.paths = WorkspacePaths.under(root)
         for directory in (self.paths.indexes, self.paths.models, self.paths.exports):
@@ -119,6 +124,7 @@ class WorkspaceSession:
         self.config: AppConfig = load_config(self.database, updated_at=_timestamp())
         self._counters = counters
         self._embedding = embedding
+        self._reranker = reranker
 
     def close(self) -> None:
         """Close the workspace database connection."""
@@ -135,6 +141,12 @@ class WorkspaceSession:
         if self._embedding is None:
             self._embedding = FastEmbedBackend(self.config.embedding, self.paths.models)
         return self._embedding
+
+    def reranker_backend(self) -> Reranker:
+        """Load the cross-encoder session once per session."""
+        if self._reranker is None:
+            self._reranker = FastEmbedReranker(self.config.reranker, self.paths.models)
+        return self._reranker
 
     def prepare_ingestion(self, path: Path) -> PreparedIngestion:
         """Read a source, plan its build, and keep the bytes for later.
@@ -208,6 +220,38 @@ class WorkspaceSession:
             generation_id=generation_id,
         )
         return search(loaded, self.embedding_backend(), self.config, focus)
+
+    def retrieve(self, focus: str) -> RetrievalRun:
+        """Run the full local retrieval pipeline over the active generation.
+
+        Args:
+            focus (str): Ordinary retrieval focus text.
+
+        Returns:
+            (RetrievalRun) Traceable retrieval result with a frozen packet.
+        """
+        generation_id = self.require_ready_generation_id()
+        loaded = load_generation(
+            self.repository,
+            passages=self.passages,
+            indexes_dir=self.paths.indexes,
+            config=self.config,
+            generation_id=generation_id,
+        )
+        starting = monotonic()
+        counters = self.token_counters()
+        backend = self.embedding_backend()
+        reranker = self.reranker_backend()
+        model_load_seconds = monotonic() - starting
+        return retrieve(
+            loaded,
+            backend,
+            reranker,
+            self.config,
+            focus,
+            counters,
+            model_load_seconds=model_load_seconds,
+        )
 
     def ingest_file(self, path: Path) -> IngestionOutcome:
         """Read, parse, and store one local source file.
