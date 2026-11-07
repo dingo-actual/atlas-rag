@@ -31,6 +31,7 @@ class SourcePreview:
         source_sha256 (str): Digest of the exact bytes.
         format_version (str): Declared ATLAS format version.
         collection_version (str): Declared ATLAS collection version.
+        license_id (str | None): Source license identifier, when recorded.
         entity_counts (tuple[tuple[str, int], ...]): Counts per record kind.
         edge_counts (tuple[tuple[str, int], ...]): Counts per relationship type.
         warnings (tuple[str, ...]): Sanitized parse observations.
@@ -41,6 +42,7 @@ class SourcePreview:
     source_sha256: str
     format_version: str
     collection_version: str
+    license_id: str | None
     entity_counts: tuple[tuple[str, int], ...]
     edge_counts: tuple[tuple[str, int], ...]
     warnings: tuple[str, ...]
@@ -183,6 +185,7 @@ def _preview(corpus: ParsedCorpus, byte_count: int) -> SourcePreview:
         source_sha256=corpus.snapshot.source_sha256,
         format_version=corpus.snapshot.format_version,
         collection_version=corpus.snapshot.collection_version,
+        license_id=corpus.snapshot.license,
         entity_counts=tuple(sorted(entity_counts.items())),
         edge_counts=tuple(sorted(edge_counts.items())),
         warnings=corpus.warnings,

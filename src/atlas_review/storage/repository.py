@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import Sequence
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from typing import Literal
 
@@ -38,6 +39,34 @@ INSERT INTO edges (
     source_locator, payload_msgpack
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 """
+
+
+@dataclass(frozen=True, slots=True)
+class StoredArtifact:
+    """Published bundle location recorded for a ready generation.
+
+    Instance Attributes:
+        directory (str): Bundle path relative to the workspace.
+        manifest_sha256 (str): Digest of the bundle manifest.
+    """
+
+    directory: str
+    manifest_sha256: str
+
+
+@dataclass(frozen=True, slots=True)
+class GenerationRecord:
+    """Stored generation identity used to decide reuse or rebuild.
+
+    Instance Attributes:
+        generation_id (str): Stored generation identifier.
+        status (GenerationStatus): ``building`` or ``ready``.
+        build_fingerprint (str): Recorded completed build fingerprint.
+    """
+
+    generation_id: str
+    status: GenerationStatus
+    build_fingerprint: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -134,6 +163,115 @@ class CorpusRepository:
                 message=f"generation {corpus.generation_id} is already stored",
                 recovery="Inspect the stored generation or create a new workspace.",
             ) from exc
+
+    def insert_generation(
+        self,
+        connection: sqlite3.Connection,
+        corpus: ParsedCorpus,
+        manifest: GenerationManifest,
+        source_bytes: bytes,
+    ) -> None:
+        """Insert one generation row inside an existing transaction.
+
+        Args:
+            connection (sqlite3.Connection): Open immediate transaction.
+            corpus (ParsedCorpus): Parsed records to persist.
+            manifest (GenerationManifest): Recorded identity and counts.
+            source_bytes (bytes): Exact source bytes for later provenance.
+        """
+        snapshot = corpus.snapshot
+        connection.execute(
+            _INSERT_GENERATION,
+            (
+                corpus.generation_id,
+                manifest.created_at,
+                snapshot.collection_version,
+                snapshot.format_version,
+                snapshot.source_sha256,
+                manifest.build_fingerprint,
+                source_bytes,
+                encode_model(manifest),
+                "building",
+            ),
+        )
+        _insert_entities(connection, corpus.generation_id, corpus.entities)
+        _insert_edges(connection, corpus.generation_id, corpus.edges)
+
+    def finalize_generation(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        manifest: GenerationManifest,
+        artifact: StoredArtifact,
+    ) -> None:
+        """Mark a generation ready and activate its published bundle.
+
+        Args:
+            connection (sqlite3.Connection): Open immediate transaction.
+            manifest (GenerationManifest): Completed manifest with artifact hash.
+            artifact (StoredArtifact): Published bundle location and digest.
+        """
+        connection.execute(
+            """
+            UPDATE generations SET
+                status = 'ready', artifact_directory = ?,
+                artifact_manifest_sha256 = ?, passage_count = ?,
+                manifest_msgpack = ?
+            WHERE generation_id = ?
+            """,
+            (
+                artifact.directory,
+                artifact.manifest_sha256,
+                manifest.passage_count,
+                encode_model(manifest),
+                manifest.generation_id,
+            ),
+        )
+        connection.execute(
+            "UPDATE workspace_state SET active_generation_id = ? WHERE singleton = 1",
+            (manifest.generation_id,),
+        )
+
+    def activate(self, generation_id: str) -> None:
+        """Point the workspace at an already ready generation atomically."""
+        with self._database.transaction() as connection:
+            connection.execute(
+                "UPDATE workspace_state SET active_generation_id = ? "
+                "WHERE singleton = 1",
+                (generation_id,),
+            )
+
+    def generation(self, generation_id: str) -> GenerationRecord | None:
+        """Return the stored identity of one generation, if it exists."""
+        row = (
+            self._database.connect()
+            .execute(
+                "SELECT generation_id, status, build_fingerprint FROM generations "
+                "WHERE generation_id = ?",
+                (generation_id,),
+            )
+            .fetchone()
+        )
+        if row is None:
+            return None
+        return GenerationRecord(
+            generation_id=row["generation_id"],
+            status=row["status"],
+            build_fingerprint=row["build_fingerprint"],
+        )
+
+    def transaction(self) -> AbstractContextManager[sqlite3.Connection]:
+        """Open one explicit immediate transaction on the workspace database."""
+        return self._database.transaction()
+
+    def artifact(self, generation_id: str) -> StoredArtifact | None:
+        """Return the recorded bundle location of one generation."""
+        row = self._generation_row(generation_id)
+        directory = row["artifact_directory"]
+        digest = row["artifact_manifest_sha256"]
+        if directory is None or digest is None:
+            return None
+        return StoredArtifact(directory=str(directory), manifest_sha256=str(digest))
 
     def active_generation_id(self) -> str | None:
         """Return the active generation identifier, if the workspace has one."""

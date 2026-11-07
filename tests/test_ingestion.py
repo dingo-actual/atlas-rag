@@ -68,6 +68,43 @@ class TestSourceParsing:
             session.ingest_file(_write(session.paths.root, b"{{{"))
         assert session.generations() == ()
 
+    def test_duplicate_mapping_key_is_refused_without_storage(
+        self, session: WorkspaceSession, source_bytes: bytes
+    ) -> None:
+        duplicated = source_bytes.replace(
+            b"    maturity: Demonstrated\n    uuid: 1b0a5a55-1111-4d1d-8a11-0a0a0a0a0a01",
+            b"    maturity: Demonstrated\n    maturity: Advanced\n"
+            b"    uuid: 1b0a5a55-1111-4d1d-8a11-0a0a0a0a0a01",
+            1,
+        )
+        with pytest.raises(AtlasReviewError) as caught:
+            session.ingest_file(_write(session.paths.root, duplicated))
+        assert caught.value.code == "duplicate_mapping_key"
+        assert caught.value.stage == "source_schema"
+        assert session.generations() == ()
+
+    def test_recursive_alias_is_refused_without_storage(
+        self, session: WorkspaceSession, source_bytes: bytes
+    ) -> None:
+        recursive = source_bytes.replace(
+            b"    maturity: Demonstrated\n",
+            b"    maturity: Demonstrated\n    extra: &loop\n      self: *loop\n",
+            1,
+        )
+        with pytest.raises(AtlasReviewError) as caught:
+            session.ingest_file(_write(session.paths.root, recursive))
+        assert caught.value.code == "cyclic_source_structure"
+        assert session.generations() == ()
+
+    def test_unquoted_source_dates_are_preserved_as_text(
+        self, session: WorkspaceSession, source_bytes: bytes
+    ) -> None:
+        unquoted = source_bytes.replace(b"'2023-10-25'", b"2023-10-25", 1)
+        outcome = session.ingest_file(_write(session.paths.root, unquoted))
+        stored = session.repository.entity(outcome.generation_id, "AML.T0051")
+        assert stored.created_date == "2023-10-25"
+        assert stored.modified_date == "2024-06-01"
+
 
 class TestCommandLine:
     """The entry point ingests one source and reports status without the menu."""

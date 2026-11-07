@@ -8,9 +8,10 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import yaml
+from yaml.nodes import MappingNode, ScalarNode
 
 from atlas_review.contracts import JsonValue, SourceReference
 from atlas_review.errors import STAGE_SOURCE_SCHEMA, AtlasReviewError
@@ -45,6 +46,42 @@ RELATION_ENDPOINTS: dict[RelationName, tuple[EntityKind, EntityKind]] = {
     "achieves": ("technique", "tactic"),
     "sequences": ("matrix", "tactic"),
 }
+
+MAX_DECODED_NODES = 1_000_000
+_TIMESTAMP_TAG = "tag:yaml.org,2002:timestamp"
+
+
+class SourceLoader(yaml.SafeLoader):
+    """Safe loader that keeps source dates textual and rejects duplicate keys.
+
+    Implicit timestamp resolution is redirected to the source's own scalar text,
+    so ``created-date: 2024-01-01`` stays a string rather than becoming a
+    Python date object.
+    """
+
+    def construct_mapping(
+        self, node: MappingNode, deep: bool = False
+    ) -> dict[Any, Any]:
+        """Reject an authored duplicate key instead of silently overwriting it."""
+        seen: set[tuple[str, str]] = set()
+        for key_node, _ in node.value:
+            if not isinstance(key_node, ScalarNode):
+                continue
+            marker = (key_node.tag, key_node.value)
+            if marker in seen:
+                raise yaml.constructor.ConstructorError(
+                    None,
+                    None,
+                    f"duplicate mapping key {key_node.value!r}",
+                    key_node.start_mark,
+                )
+            seen.add(marker)
+        return super().construct_mapping(node, deep=deep)
+
+
+SourceLoader.add_constructor(
+    _TIMESTAMP_TAG, lambda _loader, node: cast("str", node.value)
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -115,7 +152,7 @@ def source_error(
 
 
 def load_document(raw: bytes) -> Mapping[str, Any]:
-    """Decode the YAML document and require a mapping at the top level.
+    """Decode the YAML document and require a bounded, acyclic mapping.
 
     Args:
         raw (bytes): Source bytes.
@@ -124,17 +161,51 @@ def load_document(raw: bytes) -> Mapping[str, Any]:
         (Mapping[str, Any]) Parsed top-level mapping.
 
     Raises:
-        AtlasReviewError: The bytes are not YAML or not a mapping.
+        AtlasReviewError: The bytes are not YAML, not a mapping, contain a
+            duplicate key, or decode to an oversized or cyclic structure.
     """
     try:
-        document = yaml.safe_load(raw)
+        document = yaml.load(raw, Loader=SourceLoader)  # noqa: S506 - safe subclass
+    except yaml.constructor.ConstructorError as exc:
+        raise source_error(
+            "duplicate_mapping_key", exc.problem or "duplicate mapping key"
+        ) from exc
     except yaml.YAMLError as exc:
         raise source_error(
             "unreadable_source", "source file is not valid YAML"
         ) from exc
     if not isinstance(document, Mapping):
         raise source_error("unreadable_source", "source file must be a YAML mapping")
+    _check_decoded_shape(document)
     return document
+
+
+def _check_decoded_shape(document: Mapping[str, Any]) -> None:
+    """Reject cyclic aliases and structures too large to be a real collection."""
+    budget = MAX_DECODED_NODES
+    stack: list[tuple[object, frozenset[int]]] = [(document, frozenset())]
+    while stack:
+        value, ancestors = stack.pop()
+        budget -= 1
+        if budget < 0:
+            raise source_error(
+                "oversized_source_structure",
+                f"source decodes to more than {MAX_DECODED_NODES} values",
+            )
+        children: Iterable[object] = ()
+        if isinstance(value, Mapping):
+            children = (*value.keys(), *value.values())
+        elif isinstance(value, list):
+            children = value
+        else:
+            continue
+        if id(value) in ancestors:
+            raise source_error(
+                "cyclic_source_structure",
+                "source contains a recursive alias",
+            )
+        nested = ancestors | {id(value)}
+        stack.extend((child, nested) for child in children)
 
 
 def check_format_major(format_version: str) -> None:

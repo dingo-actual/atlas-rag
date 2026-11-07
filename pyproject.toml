@@ -8,10 +8,16 @@ authors = [
 ]
 requires-python = ">=3.12"
 dependencies = [
+    "bm25s>=0.3.16",
+    "fastembed>=0.9.1",
     "msgspec>=0.19",
+    "numpy>=2.5.4",
+    "openai>=3.46.0",
     "pydantic>=2,<3",
     "pyyaml>=6",
     "rich>=13",
+    "tokenizers>=0.23.3",
+    "usearch>=2.26.6",
 ]
 
 [project.scripts]
@@ -26,7 +32,7 @@ module-name = "atlas_review"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "--disable-socket"
+addopts = "--disable-socket -m 'not smoke'"
 markers = [
     "smoke: requires model downloads and network access (opt-in)",
 ]
@@ -107,7 +113,7 @@ max-args = 6  # parse context travels together through the corpus validators
     "PLR2004",
     "TRY003",
 ]
-"src/atlas_review/corpus/normalize.py" = ["ARG002"]  # jmespath passes unused attrs
+"src/atlas_review/corpus/normalize.py" = ["ARG002"]  # HTMLParser hooks ignore attributes
 "src/atlas_review/config.py" = ["S105"]  # "token" appears in field names
 
 [tool.mypy]
@@ -118,13 +124,18 @@ warn_unused_configs = true
 show_error_codes = true
 files = ["src", "tests"]
 
+[[tool.mypy.overrides]]
+module = ["bm25s"]
+ignore_missing_imports = true
+
 [tool.pyright]
 include = ["src", "tests"]
 pythonVersion = "3.12"
 typeCheckingMode = "strict"
 reportMissingTypeStubs = false
-# Third-party stubs (yaml, jmespath, hypothesis) erase these types at the boundary.
-# mypy strict already requires explicit annotations on our own code.
+reportMissingModuleSource = false
+# Third-party stubs (yaml, hypothesis) erase these types at the boundary.
+# mypy strict already requires explicit annotations.
 reportUnknownArgumentType = false
 reportUnknownLambdaType = false
 reportUnknownMemberType = false

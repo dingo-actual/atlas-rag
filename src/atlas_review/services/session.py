@@ -2,12 +2,26 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
 from atlas_review.config import AppConfig
-from atlas_review.errors import STAGE_INGESTION, AtlasReviewError
+from atlas_review.corpus.atlas_v6 import ParsedCorpus
+from atlas_review.corpus.ingest import (
+    BuildServices,
+    IngestionPlan,
+    plan_ingestion,
+    run_ingestion,
+)
+from atlas_review.corpus.ingest import IngestionOutcome as BuildOutcome
+from atlas_review.errors import STAGE_INGESTION, STAGE_RETRIEVAL, AtlasReviewError
+from atlas_review.inference.client import build_contextualizer
+from atlas_review.retrieval.embeddings import EmbeddingBackend, FastEmbedBackend
+from atlas_review.retrieval.hybrid import SearchOutcome, check_focus, search
+from atlas_review.retrieval.loader import load_generation
+from atlas_review.retrieval.tokenizers import TokenCounters, load_token_counters
 from atlas_review.services.ingestion import (
     IngestionOutcome,
     SourcePreview,
@@ -17,6 +31,7 @@ from atlas_review.services.ingestion import (
 )
 from atlas_review.services.settings import load_config
 from atlas_review.storage.database import WorkspaceDatabase
+from atlas_review.storage.passages import PassageRepository
 from atlas_review.storage.repository import (
     CorpusRepository,
     EntityInspection,
@@ -61,25 +76,138 @@ class WorkspacePaths:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class PreparedIngestion:
+    """A planned source ready for an explicit contextualized build.
+
+    Instance Attributes:
+        preview (SourcePreview): Parsed source summary for confirmation.
+        plan (IngestionPlan): LLM-free build plan.
+        corpus (ParsedCorpus): Parsed records retained from preparation.
+        source_bytes (bytes): Exact source bytes retained for provenance.
+    """
+
+    preview: SourcePreview
+    plan: IngestionPlan
+    corpus: ParsedCorpus
+    source_bytes: bytes
+
+
 class WorkspaceSession:
     """Coordinate one workspace database, configuration, and corpus repository."""
 
-    def __init__(self, root: Path) -> None:
+    def __init__(
+        self,
+        root: Path,
+        *,
+        counters: TokenCounters | None = None,
+        embedding: EmbeddingBackend | None = None,
+    ) -> None:
         """Open the workspace and load or initialise its configuration.
 
         Args:
             root (Path): Workspace directory supplied by ``--workspace``.
+            counters (TokenCounters | None): Injected retrieval tokenizers.
+            embedding (EmbeddingBackend | None): Injected embedding backend.
         """
         self.paths = WorkspacePaths.under(root)
         for directory in (self.paths.indexes, self.paths.models, self.paths.exports):
             directory.mkdir(parents=True, exist_ok=True)
         self.database = WorkspaceDatabase(self.paths.database)
         self.repository = CorpusRepository(self.database)
+        self.passages = PassageRepository(self.database)
         self.config: AppConfig = load_config(self.database, updated_at=_timestamp())
+        self._counters = counters
+        self._embedding = embedding
 
     def close(self) -> None:
         """Close the workspace database connection."""
         self.database.close()
+
+    def token_counters(self) -> TokenCounters:
+        """Load the retrieval tokenizers once per session."""
+        if self._counters is None:
+            self._counters = load_token_counters(self.config, self.paths.models)
+        return self._counters
+
+    def embedding_backend(self) -> EmbeddingBackend:
+        """Load the embedding session once per session."""
+        if self._embedding is None:
+            self._embedding = FastEmbedBackend(self.config.embedding, self.paths.models)
+        return self._embedding
+
+    def prepare_ingestion(self, path: Path) -> PreparedIngestion:
+        """Read a source, plan its build, and keep the bytes for later.
+
+        Args:
+            path (Path): ATLAS v6 YAML file.
+
+        Returns:
+            (PreparedIngestion) Corpus, preview, and LLM-free build plan.
+        """
+        raw = read_source_file(path, max_bytes=self.config.corpus.max_source_bytes)
+        corpus, preview = preview_source(raw, origin=str(path))
+        plan = plan_ingestion(
+            corpus,
+            config=self.config,
+            repository=self.repository,
+            passages=self.passages,
+            counters=self.token_counters(),
+        )
+        return PreparedIngestion(
+            preview=preview, plan=plan, corpus=corpus, source_bytes=raw
+        )
+
+    def build_generation(
+        self, prepared: PreparedIngestion, progress: Callable[[str], None] | None = None
+    ) -> BuildOutcome:
+        """Contextualize and index a planned source, then activate it.
+
+        Args:
+            prepared (PreparedIngestion): Planned source from preparation.
+            progress (Callable[[str], None] | None): Stage progress reporter.
+
+        Returns:
+            (IngestionOutcome) Activation summary.
+        """
+        contextualizer = None
+        if not prepared.plan.reuse_generation and prepared.plan.uncached_context_count:
+            contextualizer = build_contextualizer(self.config.llm)
+        return run_ingestion(
+            prepared.corpus,
+            source_bytes=prepared.source_bytes,
+            services=BuildServices(
+                config=self.config,
+                repository=self.repository,
+                passages=self.passages,
+                indexes_dir=self.paths.indexes,
+                counters=self.token_counters(),
+                backend=self.embedding_backend(),
+                contextualizer=contextualizer,
+                progress=progress,
+            ),
+        )
+
+    def search(self, focus: str) -> SearchOutcome:
+        """Run the initial dense and keyword channels over the active generation.
+
+        Args:
+            focus (str): Ordinary retrieval focus text.
+
+        Returns:
+            (SearchOutcome) Channel hits, fused candidates, and passages.
+        """
+        generation_id = self.require_ready_generation_id()
+        counters = self.token_counters()
+        check_focus(focus, counters, self.config)
+        loaded = load_generation(
+            self.repository,
+            passages=self.passages,
+            indexes_dir=self.paths.indexes,
+            config=self.config,
+            generation_id=generation_id,
+        )
+        return search(loaded, self.embedding_backend(), self.config, focus)
 
     def ingest_file(self, path: Path) -> IngestionOutcome:
         """Read, parse, and store one local source file.
@@ -159,6 +287,25 @@ class WorkspaceSession:
                 stage=STAGE_INGESTION,
                 message="this workspace has no stored corpus generation",
                 recovery="Ingest an ATLAS v6 source file first.",
+            )
+        return generation_id
+
+    def require_ready_generation_id(self) -> str:
+        """Return the active generation identifier or fail with guidance.
+
+        Returns:
+            (str) Active generation identifier.
+
+        Raises:
+            AtlasReviewError: No generation is active for retrieval.
+        """
+        generation_id = self.repository.active_generation_id()
+        if generation_id is None:
+            raise AtlasReviewError(
+                code="no_active_generation",
+                stage=STAGE_RETRIEVAL,
+                message="this workspace has no active index bundle",
+                recovery=("Run an explicit contextualized ingestion build first."),
             )
         return generation_id
 

@@ -13,11 +13,22 @@ STAGE_STORAGE = "storage"
 STAGE_DATABASE = "database"
 STAGE_INGESTION = "ingestion"
 STAGE_UI = "ui"
+STAGE_MODEL_ACQUISITION = "model_acquisition"
+STAGE_CONTEXT_DOCUMENT = "context_document"
+STAGE_CONTEXTUALIZATION = "contextualization"
+STAGE_EMBEDDING = "embedding"
+STAGE_INDEX = "index_integrity"
+STAGE_RETRIEVAL = "retrieval"
+STAGE_LLM_AUTHENTICATION = "llm_authentication"
+STAGE_LLM_PROVIDER = "llm_provider"
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(slots=True)
 class AtlasReviewError(Exception):
     """Expected application failure carrying a safe message and recovery action.
+
+    The class stays mutable because Python assigns ``__traceback__`` on
+    exceptions that cross a generator boundary.
 
     Args:
         code (str): Stable machine-readable identifier.

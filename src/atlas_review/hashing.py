@@ -29,7 +29,13 @@ def canonical_json(value: JsonValue) -> str:
     Returns:
         (str) Canonical JSON with sorted keys and no insignificant spacing.
     """
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    )
 
 
 def fingerprint(value: JsonValue) -> str:

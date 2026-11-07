@@ -20,3 +20,8 @@ agent_resources/
 agent_state/
 resources/*
 AGENTS.md
+
+# Workspace state, generated indexes, model cache, exports, local secrets
+.atlas-review/
+*.sqlite3
+.env

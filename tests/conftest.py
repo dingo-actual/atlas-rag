@@ -7,7 +7,12 @@ from pathlib import Path
 
 import pytest
 
+from atlas_review.corpus.atlas_v6 import ParsedCorpus, parse_source
+from atlas_review.retrieval.tokenizers import TokenCounters
 from atlas_review.services.session import WorkspaceSession
+from fakes import FixedContextualizer, RecordingEmbedder, WhitespaceTokenCounter
+
+ACQUIRED_AT = "2026-11-01T00:00:00+00:00"
 
 FIXTURE_SOURCE = Path(__file__).resolve().parents[1] / "fixtures" / "mini_atlas_v6.yaml"
 
@@ -45,3 +50,29 @@ def stored_session(session: WorkspaceSession, source_path: Path) -> WorkspaceSes
     """Return a session that already stores the committed fixture source."""
     session.ingest_file(source_path)
     return session
+
+
+@pytest.fixture
+def corpus(source_bytes: bytes, source_path: Path) -> ParsedCorpus:
+    """Return the parsed committed fixture."""
+    return parse_source(source_bytes, origin=str(source_path), acquired_at=ACQUIRED_AT)
+
+
+@pytest.fixture
+def counters() -> TokenCounters:
+    """Return whitespace token counters standing in for the model tokenizers."""
+    return TokenCounters(
+        embedding=WhitespaceTokenCounter(), reranker=WhitespaceTokenCounter()
+    )
+
+
+@pytest.fixture
+def embedder() -> RecordingEmbedder:
+    """Return a recording hashed bag-of-words embedder."""
+    return RecordingEmbedder()
+
+
+@pytest.fixture
+def contextualizer() -> FixedContextualizer:
+    """Return a fixed chunk contextualizer."""
+    return FixedContextualizer()
