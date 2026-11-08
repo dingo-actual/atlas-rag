@@ -468,6 +468,59 @@ class EvidencePacket(AppModel):
     allowed_associations: list[AllowedAssociation] = Field(default_factory=list)
 
 
+class ControlRecommendation(AppModel):
+    """One proposed check for a finding, with its ATLAS grounding."""
+
+    action: Explanation
+    rationale: Explanation
+    verification: ShortText
+    mitigation_ids: list[RequiredText]
+    evidence_ids: Annotated[list[RequiredText], Field(min_length=1)]
+
+
+class ReviewFinding(AppModel):
+    """One review concern: technique, applicability, evidence, and checks."""
+
+    finding_id: RequiredText
+    title: Explanation
+    technique_ids: Annotated[list[RequiredText], Field(min_length=1)]
+    priority: Literal["review_first", "review_next", "informational"]
+    priority_rationale: Explanation
+    applicability: Explanation
+    input_facts: list[Explanation] = Field(default_factory=list)
+    assumptions_or_unknowns: list[Explanation] = Field(default_factory=list)
+    atlas_basis: Explanation
+    case_study_ids: list[RequiredText] = Field(default_factory=list)
+    evidence_ids: Annotated[list[RequiredText], Field(min_length=1)]
+    controls: Annotated[list[ControlRecommendation], Field(max_length=5)] = Field(
+        default_factory=list
+    )
+    review_questions: Annotated[list[ShortText], Field(max_length=10)] = Field(
+        default_factory=list
+    )
+
+
+class ReviewReport(AppModel):
+    """Validated review synthesis output (spec section 3.3)."""
+
+    schema_version: VersionOne
+    summary: Explanation
+    findings: list[ReviewFinding] = Field(default_factory=list)
+    unanswered_questions: Annotated[list[ShortText], Field(max_length=20)] = Field(
+        default_factory=list
+    )
+    evidence_gaps: Annotated[list[ShortText], Field(max_length=20)] = Field(
+        default_factory=list
+    )
+
+    @model_validator(mode="after")
+    def unique_finding_ids(self) -> Self:
+        identifiers = [finding.finding_id for finding in self.findings]
+        if len(identifiers) != len(set(identifiers)):
+            raise ValueError("finding IDs must be unique")
+        return self
+
+
 class StageTiming(AppModel):
     """One retrieval stage and its monotonic-clock duration."""
 
@@ -577,3 +630,51 @@ class GenerationManifest(AppModel):
     lexical: LexicalIdentity | None = None
     contextualization: ContextualizationIdentity | None = None
     package_versions: dict[str, str] = Field(default_factory=dict)
+
+
+AttemptState = Literal["started", "complete", "failed", "interrupted"]
+
+
+class ReviewAttempt(AppModel):
+    """One recorded review-synthesis request and its outcome (spec 13.6).
+
+    The provider identity is a non-secret snapshot: the API key itself is
+    resolved at call time and never enters a stored attempt.
+    """
+
+    schema_version: VersionOne
+    review_id: RequiredText
+    attempt_number: int = Field(gt=0)
+    state: AttemptState
+    started_at: RequiredText
+    provider_name: RequiredText
+    base_url: RequiredText
+    model: RequiredText
+    output_token_parameter: Literal["max_tokens", "max_completion_tokens"]
+    output_tokens: int = Field(gt=0)
+    temperature: float | None = None
+    response_format_mode: Literal["text", "json_object"]
+    max_findings: int = Field(gt=0)
+    request_characters: int = Field(ge=0)
+    evidence_item_count: int = Field(ge=0)
+    response_text: str | None = None
+    response_id: str | None = None
+    response_model: str | None = None
+    usage_input_tokens: int | None = Field(default=None, ge=0)
+    usage_output_tokens: int | None = Field(default=None, ge=0)
+    duration_seconds: float | None = Field(default=None, ge=0)
+    validation_details: Annotated[list[RequiredText], Field(max_length=20)] = Field(
+        default_factory=list
+    )
+    error_code: str | None = None
+    error_message: str | None = None
+
+    @model_validator(mode="after")
+    def check_state_fields(self) -> Self:
+        if self.state == "failed" and self.error_code is None:
+            raise ValueError("a failed attempt must record an error code")
+        if self.state == "complete" and self.error_code is not None:
+            raise ValueError("a complete attempt must not record an error code")
+        if self.state == "complete" and not self.response_text:
+            raise ValueError("a complete attempt must record the response text")
+        return self

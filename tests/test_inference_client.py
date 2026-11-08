@@ -17,11 +17,13 @@ from openai.types.chat.chat_completion_chunk import (
 from atlas_review.config import LLMConfig
 from atlas_review.errors import AtlasReviewError
 from atlas_review.inference.client import (
-    MAX_RESPONSE_BYTES,
+    MAX_CONTEXT_RESPONSE_BYTES,
+    MAX_REVIEW_RESPONSE_BYTES,
     PLACEHOLDER_API_KEY,
     ChatContextualizer,
     MissingProviderCredentialError,
     build_contextualizer,
+    build_reviewer,
     collect_stream,
     resolve_api_key,
 )
@@ -30,13 +32,56 @@ from fakes import FakeChatClient, FakeCompletions, FinishReason, stream_chunks
 CONFIG = LLMConfig(base_url="https://provider.example/v1", model="fake-model-1")
 
 
+def provider(**overrides: object) -> LLMConfig:
+    """Return a provider configuration with explicit overrides."""
+    return LLMConfig.model_validate(
+        {**CONFIG.model_dump(mode="json"), **overrides}, strict=True
+    )
+
+
 def contextualizer(
     config: LLMConfig, chunks: tuple[ChatCompletionChunk, ...]
 ) -> tuple[ChatContextualizer, FakeCompletions]:
     """Return a contextualizer bound to a recording fake client."""
+    return adapter(config, chunks)
+
+
+def adapter(
+    config: LLMConfig,
+    chunks: tuple[ChatCompletionChunk, ...],
+    *,
+    max_response_bytes: int = MAX_CONTEXT_RESPONSE_BYTES,
+    request_json_mode: bool = False,
+) -> tuple[ChatContextualizer, FakeCompletions]:
+    """Return an adapter bound to a recording fake client."""
     completions = FakeCompletions(chunks=chunks)
     client = cast("OpenAI", FakeChatClient(completions=completions))
-    return ChatContextualizer(config, client), completions
+    return (
+        ChatContextualizer(
+            config,
+            client,
+            max_response_bytes=max_response_bytes,
+            request_json_mode=request_json_mode,
+        ),
+        completions,
+    )
+
+
+def refusal_chunk() -> ChatCompletionChunk:
+    """Return a streamed delta that refuses the request."""
+    return ChatCompletionChunk(
+        id="chatcmpl-1",
+        choices=[
+            Choice(
+                index=0,
+                delta=ChoiceDelta(refusal="I cannot help with that."),
+                finish_reason=None,
+            )
+        ],
+        created=0,
+        model="fake-model-1",
+        object="chat.completion.chunk",
+    )
 
 
 def tool_call_chunk() -> ChatCompletionChunk:
@@ -144,10 +189,16 @@ class TestStreamCollection:
             pytest.param([], "stop", "empty_provider_response", id="empty"),
             pytest.param(["  ", "\n"], "stop", "empty_provider_response", id="blank"),
             pytest.param(
-                ["x" * (MAX_RESPONSE_BYTES // 2)] * 3,
+                ["x" * (MAX_CONTEXT_RESPONSE_BYTES // 2)] * 3,
                 "stop",
                 "oversized_provider_response",
                 id="oversized",
+            ),
+            pytest.param(
+                ["partial"],
+                "content_filter",
+                "filtered_provider_response",
+                id="filtered",
             ),
         ],
     )
@@ -164,6 +215,32 @@ class TestStreamCollection:
         with pytest.raises(AtlasReviewError) as caught:
             collect_stream(iter((tool_call_chunk(),)), duration=0.1)
         assert caught.value.code == "unsupported_provider_response"
+
+    def test_refusal_delta_is_rejected(self) -> None:
+        with pytest.raises(AtlasReviewError) as caught:
+            collect_stream(iter((refusal_chunk(),)), duration=0.1)
+        assert caught.value.code == "unsupported_provider_response"
+
+    def test_review_bound_accepts_a_larger_report_than_the_context_bound(
+        self,
+    ) -> None:
+        report = '{"summary": "' + "x" * MAX_CONTEXT_RESPONSE_BYTES + '"}'
+        reply = collect_stream(
+            iter(stream_chunks([report])),
+            duration=0.1,
+            max_bytes=MAX_REVIEW_RESPONSE_BYTES,
+        )
+        assert len(reply.text.encode("utf-8")) > MAX_CONTEXT_RESPONSE_BYTES
+
+    def test_review_bound_is_still_enforced(self) -> None:
+        oversized = "x" * (MAX_REVIEW_RESPONSE_BYTES + 1)
+        with pytest.raises(AtlasReviewError) as caught:
+            collect_stream(
+                iter(stream_chunks([oversized])),
+                duration=0.1,
+                max_bytes=MAX_REVIEW_RESPONSE_BYTES,
+            )
+        assert caught.value.code == "oversized_provider_response"
 
 
 class TestStreamedRequest:
@@ -189,7 +266,7 @@ class TestStreamedRequest:
         assert call["temperature"] == 0.2
         assert call["model"] == "fake-model-1"
         assert "tools" not in call
-        assert "response_format" not in call
+        assert call["response_format"] is omit
 
     def test_null_temperature_is_omitted_from_the_request(self) -> None:
         client, completions = contextualizer(CONFIG, stream_chunks(["ok"]))
@@ -208,3 +285,60 @@ class TestStreamedRequest:
         client("system", "user", output_tokens=8, temperature=None)
         client("system", "user", output_tokens=8, temperature=None)
         assert len(completions.calls) == 2
+
+
+class TestReviewRequestOptions:
+    """Review synthesis sends the configured output budget and JSON mode."""
+
+    @pytest.mark.parametrize(
+        ("request_json_mode", "mode", "sent"),
+        [
+            pytest.param(True, "json_object", True, id="review-json-mode"),
+            pytest.param(True, "text", False, id="review-text-mode"),
+            pytest.param(False, "json_object", False, id="contextualization-json-mode"),
+            pytest.param(False, "text", False, id="contextualization-text-mode"),
+        ],
+    )
+    def test_json_mode_is_sent_only_for_review_synthesis(
+        self, request_json_mode: bool, mode: str, sent: bool
+    ) -> None:
+        config = provider(response_format_mode=mode)
+        client, completions = adapter(
+            config,
+            stream_chunks(["ok"]),
+            max_response_bytes=MAX_REVIEW_RESPONSE_BYTES,
+            request_json_mode=request_json_mode,
+        )
+        client("system", "user", output_tokens=64, temperature=None)
+        call = completions.calls[0]
+        if sent:
+            assert call["response_format"] == {"type": "json_object"}
+        else:
+            assert call["response_format"] is omit
+
+    def test_contextualization_bound_rejects_an_oversized_reply(self) -> None:
+        oversized = ["x" * (MAX_CONTEXT_RESPONSE_BYTES + 1)]
+        client, _ = contextualizer(CONFIG, stream_chunks(oversized))
+        with pytest.raises(AtlasReviewError) as caught:
+            client("system", "user", output_tokens=64, temperature=None)
+        assert caught.value.code == "oversized_provider_response"
+
+    def test_built_reviewer_uses_the_report_identity(self) -> None:
+        config = provider(api_key_mode="none", api_key_env=None)
+        reviewer = build_reviewer(config)
+        try:
+            assert reviewer.max_response_bytes == MAX_REVIEW_RESPONSE_BYTES
+            assert reviewer.request_json_mode is True
+        finally:
+            reviewer.close()
+
+    def test_built_contextualizer_keeps_the_context_identity(self) -> None:
+        config = provider(api_key_mode="none", api_key_env=None)
+        contextualizer_adapter = build_contextualizer(config)
+        try:
+            assert contextualizer_adapter.max_response_bytes == (
+                MAX_CONTEXT_RESPONSE_BYTES
+            )
+            assert contextualizer_adapter.request_json_mode is False
+        finally:
+            contextualizer_adapter.close()

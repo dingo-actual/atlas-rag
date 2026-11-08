@@ -21,6 +21,8 @@ STAGE_INDEX = "index_integrity"
 STAGE_RETRIEVAL = "retrieval"
 STAGE_LLM_AUTHENTICATION = "llm_authentication"
 STAGE_LLM_PROVIDER = "llm_provider"
+STAGE_LLM_OUTPUT = "llm_output"
+STAGE_EXPORT = "export"
 
 
 @dataclass(slots=True)

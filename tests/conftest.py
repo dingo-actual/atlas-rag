@@ -7,21 +7,55 @@ from pathlib import Path
 
 import pytest
 
+from atlas_review.config import AppConfig
+from atlas_review.contracts import ReviewRequest
 from atlas_review.corpus.atlas_v6 import ParsedCorpus, parse_source
 from atlas_review.corpus.ingest import BuildServices, run_ingestion
 from atlas_review.retrieval.loader import LoadedGeneration, load_generation
+from atlas_review.retrieval.pipeline import RetrievalRun, retrieve
 from atlas_review.retrieval.tokenizers import TokenCounters
 from atlas_review.services.session import WorkspaceSession
+from atlas_review.storage.reviews import ReviewRetrieval, StoredReview
 from fakes import (
     FixedContextualizer,
     RecordingEmbedder,
     RecordingReranker,
+    RecordingReviewer,
     WhitespaceTokenCounter,
 )
+from packets import CREATED_AT, default_packet, sample_trace, valid_report
 
 ACQUIRED_AT = "2026-11-01T00:00:00+00:00"
+REVIEW_ID = "review-fixture"
 
 FIXTURE_SOURCE = Path(__file__).resolve().parents[1] / "fixtures" / "mini_atlas_v6.yaml"
+
+RETRIEVAL_FOCUS = (
+    "indirect prompt injection through retrieved workspace messages "
+    "influencing sensitive answers"
+)
+
+BRIEF: dict[str, object] = {
+    "schema_version": 1,
+    "title": "Internal knowledge assistant design review",
+    "review_question": (
+        "How could untrusted retrieved content influence sensitive answers, "
+        "and what should we verify before rollout?"
+    ),
+    "retrieval_focus": RETRIEVAL_FOCUS,
+    "system_description": (
+        "An employee assistant retrieves internal documents and workspace "
+        "messages, then returns a cited answer under a service identity."
+    ),
+    "users_and_roles": ["Employees", "External collaborators"],
+    "data_sources": ["Internal document repository", "Workspace messages"],
+    "untrusted_inputs": ["Messages written by external collaborators"],
+    "tools_and_permissions": ["Search documents", "Return an answer"],
+    "sensitive_assets": ["Internal documents"],
+    "existing_controls": ["Employees authenticate before use"],
+    "constraints": ["No action tools beyond retrieval"],
+    "unknowns": ["Whether returned links are validated outside the model"],
+}
 
 
 @pytest.fixture
@@ -133,3 +167,91 @@ def loaded_generation(
         config=fake_session.config,
         generation_id=fake_session.require_ready_generation_id(),
     )
+
+
+@pytest.fixture
+def retrieval_run(
+    loaded_generation: LoadedGeneration,
+    embedder: RecordingEmbedder,
+    reranker: RecordingReranker,
+    counters: TokenCounters,
+) -> RetrievalRun:
+    """Return one local retrieval run over the built fixture generation."""
+    return retrieve(
+        loaded_generation,
+        embedder,
+        reranker,
+        AppConfig(),
+        RETRIEVAL_FOCUS,
+        counters,
+    )
+
+
+@pytest.fixture
+def reviewer() -> RecordingReviewer:
+    """Return a recording reviewer that reports insufficient evidence."""
+    return RecordingReviewer()
+
+
+@pytest.fixture
+def review_session(
+    workspace_root: Path,
+    corpus: ParsedCorpus,
+    counters: TokenCounters,
+    embedder: RecordingEmbedder,
+    contextualizer: FixedContextualizer,
+    reviewer: RecordingReviewer,
+) -> Iterator[WorkspaceSession]:
+    """Return an open session with a ready fake-built generation and a reviewer."""
+    opened = WorkspaceSession(
+        workspace_root,
+        counters=counters,
+        embedding=embedder,
+        reranker=RecordingReranker(),
+        reviewer=reviewer,
+    )
+    try:
+        run_ingestion(
+            corpus,
+            source_bytes=b"fixture",
+            services=BuildServices(
+                config=opened.config,
+                repository=opened.repository,
+                passages=opened.passages,
+                indexes_dir=opened.paths.indexes,
+                counters=counters,
+                backend=embedder,
+                contextualizer=contextualizer,
+                progress=None,
+            ),
+        )
+        yield opened
+    finally:
+        opened.close()
+
+
+@pytest.fixture
+def review_brief() -> ReviewRequest:
+    """Return the documented internal-assistant brief."""
+    return ReviewRequest.model_validate(BRIEF, strict=True)
+
+
+@pytest.fixture
+def stored_review(
+    stored_session: WorkspaceSession, review_brief: ReviewRequest
+) -> StoredReview:
+    """Return one complete saved review over the synthetic packet."""
+    generation_id = stored_session.require_generation_id()
+    stored_session.reviews.save_retrieved(
+        ReviewRetrieval(
+            review_id=REVIEW_ID,
+            generation_id=generation_id,
+            created_at=CREATED_AT,
+            request=review_brief,
+            config=stored_session.config,
+            trace=sample_trace(generation_id),
+            evidence=default_packet(),
+        )
+    )
+    stored_session.reviews.complete(REVIEW_ID, valid_report())
+    return stored_session.reviews.review(REVIEW_ID)

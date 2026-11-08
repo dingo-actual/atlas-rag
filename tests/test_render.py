@@ -6,6 +6,7 @@ from pathlib import Path
 
 from rich.console import Console, RenderableType
 
+from atlas_review.config import AppConfig, LLMConfig
 from atlas_review.contracts import (
     Candidate,
     ChannelHit,
@@ -19,6 +20,7 @@ from atlas_review.corpus.ingest import IngestionOutcome, IngestionPlan
 from atlas_review.services.ingestion import preview_source
 from atlas_review.services.session import WorkspaceSession
 from atlas_review.tui.render import (
+    inference_label,
     render_build_outcome,
     render_generations,
     render_ingest_plan,
@@ -34,6 +36,25 @@ def _text(renderable: RenderableType) -> str:
     console = Console(record=True, width=120, color_system=None)
     console.print(renderable)
     return console.export_text()
+
+
+class TestInferenceLabel:
+    """The header states whether a provider is configured."""
+
+    def test_documented_placeholder_is_reported_as_not_configured(self) -> None:
+        assert inference_label(AppConfig().llm) == "not configured"
+
+    def test_configured_endpoint_host_and_model_are_shown(self) -> None:
+        config = LLMConfig(base_url="https://provider.example/v1", model="review-model")
+        label = inference_label(config)
+        assert "provider.example" in label
+        assert "review-model" in label
+
+    def test_placeholder_endpoint_with_a_real_model_is_configured(self) -> None:
+        config = LLMConfig(
+            base_url="https://your-provider.example/v1", model="review-model"
+        )
+        assert inference_label(config) != "not configured"
 
 
 class TestSanitization:

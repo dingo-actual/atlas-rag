@@ -10,8 +10,8 @@ from rich.console import Console
 
 from atlas_review.errors import AtlasReviewError
 from atlas_review.services.session import WorkspaceSession
-from atlas_review.tui.app import print_error, run_tui
-from atlas_review.tui.render import render_preview
+from atlas_review.tui.app import run_tui
+from atlas_review.tui.render import print_error, render_preview
 
 DEFAULT_WORKSPACE = Path("./.atlas-review")
 

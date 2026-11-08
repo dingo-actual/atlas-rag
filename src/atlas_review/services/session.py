@@ -7,8 +7,16 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from time import monotonic
+from uuid import uuid4
 
 from atlas_review.config import AppConfig
+from atlas_review.contracts import (
+    ContextualizationResult,
+    EvidencePacket,
+    Passage,
+    ReviewAttempt,
+    ReviewRequest,
+)
 from atlas_review.corpus.atlas_v6 import ParsedCorpus
 from atlas_review.corpus.ingest import (
     BuildServices,
@@ -18,7 +26,19 @@ from atlas_review.corpus.ingest import (
 )
 from atlas_review.corpus.ingest import IngestionOutcome as BuildOutcome
 from atlas_review.errors import STAGE_INGESTION, STAGE_RETRIEVAL, AtlasReviewError
-from atlas_review.inference.client import build_contextualizer
+from atlas_review.export import export_markdown
+from atlas_review.inference.client import (
+    ChatContextualizer,
+    build_contextualizer,
+    build_reviewer,
+)
+from atlas_review.inference.prompt import ReviewPrompt, build_prompt
+from atlas_review.inference.review import (
+    AttemptPlan,
+    Reviewer,
+    ReviewOutcome,
+    generate_review,
+)
 from atlas_review.retrieval.embeddings import EmbeddingBackend, FastEmbedBackend
 from atlas_review.retrieval.hybrid import SearchOutcome, check_focus, search
 from atlas_review.retrieval.loader import load_generation
@@ -32,13 +52,20 @@ from atlas_review.services.ingestion import (
     preview_source,
     read_source_file,
 )
-from atlas_review.services.settings import load_config
+from atlas_review.services.settings import load_config, save_config
 from atlas_review.storage.database import WorkspaceDatabase
 from atlas_review.storage.passages import PassageRepository
 from atlas_review.storage.repository import (
     CorpusRepository,
     EntityInspection,
     GenerationSummary,
+)
+from atlas_review.storage.reviews import (
+    ReviewRepository,
+    ReviewRetrieval,
+    ReviewSummary,
+    ReviewWriter,
+    StoredReview,
 )
 
 
@@ -96,6 +123,35 @@ class PreparedIngestion:
     source_bytes: bytes
 
 
+@dataclass(frozen=True, slots=True)
+class ReviewDraft:
+    """One retrieved review waiting for an explicit Generate action.
+
+    Instance Attributes:
+        review_id (str): Stored review identifier.
+        brief (ReviewRequest): Validated brief used for retrieval.
+        run (RetrievalRun): Local retrieval result whose packet was frozen.
+    """
+
+    review_id: str
+    brief: ReviewRequest
+    run: RetrievalRun
+
+
+@dataclass(frozen=True, slots=True)
+class GeneratedContext:
+    """One stored passage with the cached note generated for it.
+
+    Instance Attributes:
+        passage (Passage): Stored passage with its source and retrieval text.
+        entry (ContextualizationResult | None): Accepted cache entry behind the
+            note, or ``None`` when the cache row is unavailable.
+    """
+
+    passage: Passage
+    entry: ContextualizationResult | None
+
+
 class WorkspaceSession:
     """Coordinate one workspace database, configuration, and corpus repository."""
 
@@ -106,6 +162,7 @@ class WorkspaceSession:
         counters: TokenCounters | None = None,
         embedding: EmbeddingBackend | None = None,
         reranker: Reranker | None = None,
+        reviewer: Reviewer | None = None,
     ) -> None:
         """Open the workspace and load or initialise its configuration.
 
@@ -114,6 +171,7 @@ class WorkspaceSession:
             counters (TokenCounters | None): Injected retrieval tokenizers.
             embedding (EmbeddingBackend | None): Injected embedding backend.
             reranker (Reranker | None): Injected cross-encoder backend.
+            reviewer (Reviewer | None): Injected review-synthesis adapter.
         """
         self.paths = WorkspacePaths.under(root)
         for directory in (self.paths.indexes, self.paths.models, self.paths.exports):
@@ -121,14 +179,33 @@ class WorkspaceSession:
         self.database = WorkspaceDatabase(self.paths.database)
         self.repository = CorpusRepository(self.database)
         self.passages = PassageRepository(self.database)
+        self.reviews = ReviewRepository(self.database)
+        self.reviews.interrupt_started()
         self.config: AppConfig = load_config(self.database, updated_at=_timestamp())
         self._counters = counters
         self._embedding = embedding
         self._reranker = reranker
+        self._reviewer = reviewer
+        self._review_client: ChatContextualizer | None = None
 
     def close(self) -> None:
-        """Close the workspace database connection."""
+        """Close the owned review client and the workspace database connection."""
+        self.close_review_client()
         self.database.close()
+
+    def close_review_client(self) -> None:
+        """Close the cached review client so a new configuration starts fresh."""
+        if self._review_client is not None:
+            self._review_client.close()
+            self._review_client = None
+
+    def review_client(self) -> Reviewer:
+        """Build the review adapter once per configuration, then reuse it."""
+        if self._reviewer is not None:
+            return self._reviewer
+        if self._review_client is None:
+            self._review_client = build_reviewer(self.config.llm)
+        return self._review_client
 
     def token_counters(self) -> TokenCounters:
         """Load the retrieval tokenizers once per session."""
@@ -281,6 +358,151 @@ class WorkspaceSession:
     def generations(self) -> tuple[GenerationSummary, ...]:
         """Return stored generations newest first."""
         return self.repository.summaries()
+
+    def save_config(self, config: AppConfig) -> None:
+        """Validate and store a replacement configuration.
+
+        Args:
+            config (AppConfig): Complete replacement configuration.
+        """
+        validated = AppConfig.model_validate(config, strict=True)
+        save_config(self.database, validated, updated_at=_timestamp())
+        self.config = validated
+        self.close_review_client()
+
+    def retrieve_review(self, brief: ReviewRequest) -> ReviewDraft:
+        """Retrieve local evidence for a brief and freeze it as a saved review.
+
+        Args:
+            brief (ReviewRequest): Validated application brief.
+
+        Returns:
+            (ReviewDraft) Stored review identifier and the retrieval run.
+        """
+        run = self.retrieve(brief.retrieval_focus)
+        review_id = uuid4().hex
+        self.reviews.save_retrieved(
+            ReviewRetrieval(
+                review_id=review_id,
+                generation_id=run.trace.generation_id,
+                created_at=_timestamp(),
+                request=brief,
+                config=self.config,
+                trace=run.trace,
+                evidence=run.selection.packet,
+            )
+        )
+        return ReviewDraft(review_id=review_id, brief=brief, run=run)
+
+    def generate_report(self, draft: ReviewDraft) -> ReviewOutcome:
+        """Make one explicit review request for a retrieved draft.
+
+        Args:
+            draft (ReviewDraft): Draft whose frozen packet is synthesized.
+
+        Returns:
+            (ReviewOutcome) Finished attempt and validated report.
+        """
+        return self._synthesize(
+            draft.review_id, draft.brief, draft.run.selection.packet
+        )
+
+    def prepare_review_request(self, draft: ReviewDraft) -> ReviewPrompt:
+        """Build the synthesis request the Generate action will send.
+
+        The request applies the configured character budget, so the screen can
+        show the evidence that actually fits before any provider call.
+
+        Args:
+            draft (ReviewDraft): Draft holding the frozen evidence packet.
+
+        Returns:
+            (ReviewPrompt) System message, user payload, and trimmed packet.
+        """
+        return build_prompt(draft.brief, draft.run.selection.packet, self.config.llm)
+
+    def regenerate_review(self, review_id: str) -> ReviewOutcome:
+        """Make one new attempt for a reopened review.
+
+        The brief and evidence are the frozen ones stored with the review; the
+        currently configured provider settings are used and recorded.
+
+        Args:
+            review_id (str): Stored review identifier.
+
+        Returns:
+            (ReviewOutcome) Finished attempt and validated report.
+        """
+        stored = self.reviews.review(review_id)
+        return self._synthesize(review_id, stored.request, stored.evidence)
+
+    def _synthesize(
+        self, review_id: str, brief: ReviewRequest, packet: EvidencePacket
+    ) -> ReviewOutcome:
+        """Record one attempt around exactly one provider request."""
+        return generate_review(
+            brief,
+            packet,
+            self.config.llm,
+            plan=AttemptPlan(
+                review_id=review_id,
+                attempt_number=self.reviews.next_attempt_number(review_id),
+                started_at=_timestamp(),
+            ),
+            reviewer=self.review_client(),
+            store=ReviewWriter(self.reviews, review_id),
+        )
+
+    def saved_reviews(self) -> tuple[ReviewSummary, ...]:
+        """Return saved reviews newest first."""
+        return self.reviews.summaries()
+
+    def open_review(self, review_id: str) -> StoredReview:
+        """Reopen one saved review without any provider request.
+
+        Args:
+            review_id (str): Stored review identifier.
+
+        Returns:
+            (StoredReview) Saved brief, evidence, and optional report.
+        """
+        return self.reviews.review(review_id)
+
+    def review_attempts(self, review_id: str) -> tuple[ReviewAttempt, ...]:
+        """Return every recorded attempt of one saved review."""
+        return self.reviews.attempts(review_id)
+
+    def generated_context(
+        self, generation_id: str, passage_id: int
+    ) -> GeneratedContext:
+        """Return one stored passage with its cached generated note.
+
+        Args:
+            generation_id (str): Generation the passage belongs to.
+            passage_id (int): Stored passage identifier.
+
+        Returns:
+            (GeneratedContext) Passage and its accepted cache entry, if any.
+        """
+        passage = self.passages.passage(generation_id, passage_id)
+        return GeneratedContext(
+            passage=passage,
+            entry=self.passages.context_entry(passage.context_cache_key),
+        )
+
+    def export_review(self, review_id: str, *, overwrite: bool = False) -> Path:
+        """Export one saved review as Markdown into the workspace exports.
+
+        Args:
+            review_id (str): Stored review identifier.
+            overwrite (bool): Replace an existing export file.
+
+        Returns:
+            (Path) Written Markdown file.
+        """
+        return export_markdown(
+            self.reviews.review(review_id), self.paths.exports, overwrite=overwrite
+        )
 
     def current_generation_id(self) -> str | None:
         """Return the active generation, or the newest stored one."""

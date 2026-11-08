@@ -1,47 +1,66 @@
-"""Rich main menu for explicit ingestion, inspection, and retrieval."""
+"""Rich main menu for explicit ingestion, review, inspection, and configuration."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
 from rich.console import Console
-from rich.panel import Panel
 from rich.prompt import Prompt
 
 from atlas_review.errors import AtlasReviewError
 from atlas_review.services.session import WorkspaceSession
+from atlas_review.storage.reviews import ReviewSummary
+from atlas_review.tui.configuration import edit_configuration
 from atlas_review.tui.render import (
+    inference_label,
+    print_error,
     render_build_outcome,
     render_generations,
     render_ingest_plan,
     render_inspection,
+    render_menu,
     render_preview,
-    render_retrieval_trace,
+    render_status,
+    sanitize_terminal_text,
+)
+from atlas_review.tui.review import run_review
+from atlas_review.tui.review_render import (
+    render_request_summary,
+    render_review,
+    render_reviews,
 )
 
-INSPECTABLE_KINDS = ("technique", "mitigation", "case_study")
-ACTIONS = ("ingest", "search", "inspect", "refresh", "quit")
+__all__ = ["run_tui"]
+
+MENU_CHOICES: tuple[tuple[str, str], ...] = (
+    ("1", "Ingest ATLAS data"),
+    ("2", "Run inference / security review"),
+    ("3", "Configure inference"),
+    ("4", "Inspect corpus and saved reviews"),
+    ("0", "Exit"),
+)
 
 
 def run_tui(console: Console, session: WorkspaceSession) -> None:
-    """Run the main menu until the operator quits.
+    """Run the main menu until the user exits.
 
     Args:
-        console (Console): Rich console supplied by the entry point.
+        console (Console): Rich console.
         session (WorkspaceSession): Open workspace session.
     """
     while True:
+        console.print(_status(session))
         console.print(render_generations(session.generations()))
-        action = Prompt.ask(
-            "Action",
-            choices=list(ACTIONS),
-            default="search",
+        console.print(render_menu(MENU_CHOICES))
+        choice = Prompt.ask(
+            "Choice",
+            choices=[key for key, _ in MENU_CHOICES],
+            default="2",
             console=console,
         )
-        if action == "quit":
-            return
         try:
-            _dispatch(console, session, action)
+            if not _dispatch(console, session, choice):
+                return
         except AtlasReviewError as error:
             print_error(console, error)
         except (EOFError, KeyboardInterrupt):
@@ -49,79 +68,137 @@ def run_tui(console: Console, session: WorkspaceSession) -> None:
             return
 
 
-def print_error(console: Console, error: AtlasReviewError) -> None:
-    """Render an application failure without exposing stored payloads.
-
-    Args:
-        console (Console): Rich console.
-        error (AtlasReviewError): Expected application failure.
-    """
-    body = [f"{error.message}", f"code: {error.code}  stage: {error.stage}"]
-    body.extend(error.details)
-    if error.recovery:
-        body.append(f"next: {error.recovery}")
-    console.print(Panel("\n".join(body), title="Error", border_style="red"))
-
-
-def _dispatch(console: Console, session: WorkspaceSession, action: str) -> None:
-    """Run one menu action."""
-    if action == "ingest":
+def _dispatch(console: Console, session: WorkspaceSession, choice: str) -> bool:
+    """Run one menu action and report whether the menu should continue."""
+    if choice == "0":
+        return False
+    if choice == "1":
         _ingest(console, session)
-    elif action == "search":
-        _search(console, session)
-    elif action == "inspect":
+    elif choice == "2":
+        run_review(console, session)
+    elif choice == "3":
+        edit_configuration(console, session)
+    else:
         _inspect(console, session)
+    return True
+
+
+def _status(session: WorkspaceSession) -> object:
+    """Render the header for the current workspace state."""
+    active = session.repository.active_generation_id()
+    collection = next(
+        (
+            summary.collection_version
+            for summary in session.generations()
+            if summary.generation_id == active
+        ),
+        "no active generation",
+    )
+    return render_status(
+        workspace=session.paths.root,
+        collection=collection,
+        inference=inference_label(session.config.llm),
+    )
 
 
 def _ingest(console: Console, session: WorkspaceSession) -> None:
-    """Plan a source, show the plan, and build it on confirmation."""
-    answer = Prompt.ask("Source file", console=console)
-    console.print("loading retrieval tokenizers (first use downloads artifacts)")
-    prepared = session.prepare_ingestion(Path(answer))
+    """Ask for a source path and run explicit contextualized ingestion."""
+    raw = Prompt.ask("ATLAS v6 YAML path", default="", console=console).strip()
+    if not raw:
+        return
+    prepared = session.prepare_ingestion(Path(raw).expanduser())
     console.print(render_preview(prepared.preview))
     console.print(render_ingest_plan(prepared.plan))
-    if not _confirmed(console, "Build this generation?"):
-        console.print("Ingestion cancelled.", style="yellow")
-        return
-    outcome = session.build_generation(prepared, progress=console.print)
-    console.print(render_build_outcome(outcome))
-
-
-def _search(console: Console, session: WorkspaceSession) -> None:
-    """Ask for a retrieval focus and render the traced local run."""
-    focus = Prompt.ask("Retrieval focus", console=console)
-    if not focus.strip():
-        console.print("Retrieval cancelled.", style="yellow")
-        return
-    console.print(
-        "loading retrieval models and reranker (first use downloads artifacts)"
+    answer = Prompt.ask(
+        "Build and activate this context now?",
+        choices=["y", "n"],
+        default="n",
+        console=console,
     )
-    console.print(render_retrieval_trace(session.retrieve(focus).trace))
+    if answer != "y":
+        return
+    console.print(render_build_outcome(session.build_generation(prepared)))
 
 
 def _inspect(console: Console, session: WorkspaceSession) -> None:
-    """Prompt for an entity and print its inspection view."""
-    kind = Prompt.ask(
-        "Kind",
-        choices=list(INSPECTABLE_KINDS),
-        default="technique",
+    """Inspect the stored corpus or reopen and export saved reviews."""
+    choice = Prompt.ask(
+        "Inspect",
+        choices=["corpus", "reviews", "return"],
+        default="reviews",
         console=console,
     )
-    choices = session.entity_choices(kind)
-    if not choices:
-        console.print(f"No stored {kind} records.", style="yellow")
+    if choice == "corpus":
+        entity_id = Prompt.ask(
+            "ATLAS entity ID, or 'back'", default="back", console=console
+        )
+        if entity_id != "back":
+            console.print(render_inspection(session.inspect(entity_id)))
+    elif choice == "reviews":
+        _reviews(console, session)
+
+
+def _reviews(console: Console, session: WorkspaceSession) -> None:
+    """List saved reviews, then reopen or export one without a new request."""
+    summaries = session.saved_reviews()
+    console.print(render_reviews(summaries))
+    if not summaries:
         return
-    for entity_id, display_name in choices:
-        console.print(f"  {entity_id}  {display_name}")
-    entity_id = Prompt.ask(
-        "Entity id",
-        choices=[entity_id for entity_id, _ in choices],
+    selected = Prompt.ask("Review ID, or 'back'", default="back", console=console)
+    match = _match(summaries, selected)
+    if match is None:
+        return
+    console.print(
+        render_review(
+            session.open_review(match.review_id),
+            session.review_attempts(match.review_id),
+        )
+    )
+    action = Prompt.ask(
+        "Action",
+        choices=["export", "regenerate", "return"],
+        default="return",
         console=console,
     )
-    console.print(render_inspection(session.inspect(entity_id)))
+    if action == "export":
+        console.print(
+            f"Exported {sanitize_terminal_text(str(session.export_review(match.review_id)))}"
+        )
+    elif action == "regenerate":
+        _regenerate(console, session, match.review_id)
 
 
-def _confirmed(console: Console, question: str) -> bool:
-    """Ask one yes/no question defaulting to no."""
-    answer = Prompt.ask(question, choices=["yes", "no"], default="no", console=console)
-    return answer == "yes"
+def _regenerate(console: Console, session: WorkspaceSession, review_id: str) -> None:
+    """Send a new attempt for a reopened review with its frozen evidence."""
+    stored = session.open_review(review_id)
+    console.print(
+        render_request_summary(session.config.llm, len(stored.evidence.items))
+    )
+    answer = Prompt.ask(
+        "Send a new request with the same stored evidence?",
+        choices=["y", "n"],
+        default="n",
+        console=console,
+    )
+    if answer != "y":
+        return
+    outcome = session.regenerate_review(review_id)
+    console.print(
+        render_review(
+            session.open_review(outcome.review_id),
+            session.review_attempts(outcome.review_id),
+        )
+    )
+
+
+def _match(summaries: tuple[ReviewSummary, ...], selected: str) -> ReviewSummary | None:
+    """Find a saved review by exact identifier or unique prefix."""
+    if selected == "back":
+        return None
+    for summary in summaries:
+        if summary.review_id == selected:
+            return summary
+    matches = [
+        summary for summary in summaries if summary.review_id.startswith(selected)
+    ]
+    return matches[0] if len(matches) == 1 else None

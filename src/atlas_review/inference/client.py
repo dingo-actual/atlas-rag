@@ -18,6 +18,9 @@ from typing import Protocol
 from openai import Omit, OpenAI, OpenAIError, omit
 from openai.types.chat import ChatCompletionMessageParam
 from openai.types.chat.chat_completion_chunk import ChatCompletionChunk
+from openai.types.shared_params.response_format_json_object import (
+    ResponseFormatJSONObject,
+)
 
 from atlas_review.config import LLMConfig
 from atlas_review.errors import (
@@ -25,10 +28,13 @@ from atlas_review.errors import (
     STAGE_LLM_PROVIDER,
     AtlasReviewError,
 )
+from atlas_review.inference.validate import MAX_REPORT_BYTES
 
-MAX_RESPONSE_BYTES = 16 * 1024
+MAX_CONTEXT_RESPONSE_BYTES = 16 * 1024
+MAX_REVIEW_RESPONSE_BYTES = MAX_REPORT_BYTES
 PLACEHOLDER_API_KEY = "not-required"
 MAX_TOKENS_PARAMETER = "max_tokens"
+JSON_RESPONSE_FORMAT = "json_object"
 
 
 class MissingProviderCredentialError(ValueError):
@@ -103,15 +109,51 @@ def resolve_api_key(config: LLMConfig, environ: Mapping[str, str] | None = None)
 def build_contextualizer(config: LLMConfig) -> ChatContextualizer:
     """Build the contextualizer, resolving the credential before any request.
 
+    Contextualization never asks for a provider response format: its output is
+    validated locally against the `ChunkContext` contract.
+
     Args:
         config (LLMConfig): Provider settings.
 
     Returns:
-        (ChatContextualizer) Contextualizer bound to the configured endpoint.
+        (ChatContextualizer) Adapter bound to the configured endpoint.
 
     Raises:
         AtlasReviewError: The configured credential is unusable.
     """
+    return _chat_adapter(
+        config,
+        max_response_bytes=MAX_CONTEXT_RESPONSE_BYTES,
+        request_json_mode=False,
+    )
+
+
+def build_reviewer(config: LLMConfig) -> ChatContextualizer:
+    """Build the review-synthesis adapter on the shared Chat Completions client.
+
+    Review synthesis accepts the larger report response bound and sends the
+    configured JSON response format, which contextualization never does.
+
+    Args:
+        config (LLMConfig): Provider settings.
+
+    Returns:
+        (ChatContextualizer) Adapter bound to the configured endpoint.
+
+    Raises:
+        AtlasReviewError: The configured credential is unusable.
+    """
+    return _chat_adapter(
+        config,
+        max_response_bytes=MAX_REVIEW_RESPONSE_BYTES,
+        request_json_mode=True,
+    )
+
+
+def _chat_adapter(
+    config: LLMConfig, *, max_response_bytes: int, request_json_mode: bool
+) -> ChatContextualizer:
+    """Resolve the credential and build one configured adapter."""
     try:
         api_key = resolve_api_key(config)
     except MissingProviderCredentialError as exc:
@@ -121,7 +163,7 @@ def build_contextualizer(config: LLMConfig) -> ChatContextualizer:
             message=str(exc),
             recovery=(
                 "Set the configured environment variable in the shell that "
-                "launches the application, then restart and resume the build."
+                "launches the application, then retry or restart it."
             ),
         ) from exc
     return ChatContextualizer(
@@ -132,20 +174,27 @@ def build_contextualizer(config: LLMConfig) -> ChatContextualizer:
             timeout=config.timeout_seconds,
             max_retries=0,
         ),
+        max_response_bytes=max_response_bytes,
+        request_json_mode=request_json_mode,
     )
 
 
 @dataclass(slots=True)
 class ChatContextualizer:
-    """Send streamed chunk-contextualization requests through Chat Completions.
+    """Send one streamed Chat Completions request through the configured client.
 
     Instance Attributes:
         config (LLMConfig): Provider settings used for the request.
         client (OpenAI): Client constructed with SDK retries disabled.
+        max_response_bytes (int): Bound on the assembled response text.
+        request_json_mode (bool): Whether the configured JSON response format
+            is sent with the request (review synthesis only).
     """
 
     config: LLMConfig
     client: OpenAI
+    max_response_bytes: int = MAX_CONTEXT_RESPONSE_BYTES
+    request_json_mode: bool = False
 
     def __call__(
         self,
@@ -158,8 +207,8 @@ class ChatContextualizer:
         """Stream one request and return its assembled, bounded reply.
 
         Args:
-            system_prompt (str): Contextualization instructions.
-            user_payload (str): JSON owner document and target chunk.
+            system_prompt (str): System instructions.
+            user_payload (str): JSON request payload.
             output_tokens (int): Output allowance for this request.
             temperature (float | None): Optional sampling temperature; a null
                 value is omitted from the request because some models reject it.
@@ -175,10 +224,13 @@ class ChatContextualizer:
             {"role": "user", "content": user_payload},
         ]
         started = time.monotonic()
-        sampling: float | Omit = omit if temperature is None else temperature
         try:
-            stream = self._create(messages, output_tokens, sampling)
-            reply = collect_stream(stream, duration=time.monotonic() - started)
+            stream = self._create(messages, output_tokens, temperature)
+            reply = collect_stream(
+                stream,
+                duration=time.monotonic() - started,
+                max_bytes=self.max_response_bytes,
+            )
         except OpenAIError as exc:
             raise _provider_error(exc) from exc
         return reply
@@ -187,26 +239,43 @@ class ChatContextualizer:
         self,
         messages: list[ChatCompletionMessageParam],
         output_tokens: int,
-        temperature: float | Omit,
+        temperature: float | None,
     ) -> Iterator[ChatCompletionChunk]:
         """Open the streamed completion with the configured token parameter."""
+        response_format: ResponseFormatJSONObject | Omit = self._response_format()
         if self.config.output_token_parameter == MAX_TOKENS_PARAMETER:
             return self.client.chat.completions.create(
                 model=self.config.model,
                 messages=messages,
                 stream=True,
                 stream_options={"include_usage": True},
+                response_format=response_format,
                 max_tokens=output_tokens,
-                temperature=temperature,
+                temperature=self._sampling(temperature),
             )
         return self.client.chat.completions.create(
             model=self.config.model,
             messages=messages,
             stream=True,
             stream_options={"include_usage": True},
+            response_format=response_format,
             max_completion_tokens=output_tokens,
-            temperature=temperature,
+            temperature=self._sampling(temperature),
         )
+
+    def _response_format(self) -> ResponseFormatJSONObject | Omit:
+        """Return the configured JSON response format, or omit it."""
+        if (
+            not self.request_json_mode
+            or self.config.response_format_mode != JSON_RESPONSE_FORMAT
+        ):
+            return omit
+        return ResponseFormatJSONObject(type="json_object")
+
+    @staticmethod
+    def _sampling(temperature: float | None) -> float | Omit:
+        """Omit a null temperature because some compatible models reject it."""
+        return omit if temperature is None else temperature
 
     def close(self) -> None:
         """Close the underlying HTTP client."""
@@ -214,19 +283,24 @@ class ChatContextualizer:
 
 
 def collect_stream(
-    chunks: Iterator[ChatCompletionChunk], *, duration: float
+    chunks: Iterator[ChatCompletionChunk],
+    *,
+    duration: float,
+    max_bytes: int = MAX_CONTEXT_RESPONSE_BYTES,
 ) -> ProviderReply:
     """Assemble one streamed completion and reject unusable output.
 
     Args:
         chunks (Iterator[ChatCompletionChunk]): Streamed deltas in order.
         duration (float): Wall time already spent on the request.
+        max_bytes (int): Largest accepted response size in UTF-8 bytes.
 
     Returns:
         (ProviderReply) Assembled text and reportable metadata.
 
     Raises:
-        AtlasReviewError: The stream is empty, truncated, tool-calling, or oversized.
+        AtlasReviewError: The stream is empty, refused, truncated, tool-calling,
+            filtered, or oversized.
     """
     parts: list[str] = []
     size = 0
@@ -244,25 +318,30 @@ def collect_stream(
             output_tokens = _optional_count(usage.completion_tokens) or output_tokens
         for choice in chunk.choices:
             finish_reason = choice.finish_reason or finish_reason
-            if choice.delta.tool_calls:
+            if choice.delta.tool_calls or choice.delta.refusal:
                 raise _output_error(
                     "unsupported_provider_response",
-                    "provider returned a tool call instead of textual output",
+                    "provider refused or answered with a tool call instead of text",
                 )
             piece = choice.delta.content
             if not piece:
                 continue
             size += len(piece.encode("utf-8"))
-            if size > MAX_RESPONSE_BYTES:
+            if size > max_bytes:
                 raise _output_error(
                     "oversized_provider_response",
-                    f"provider response exceeds {MAX_RESPONSE_BYTES} bytes",
+                    f"provider response exceeds {max_bytes} bytes",
                 )
             parts.append(piece)
     if finish_reason == "length":
         raise _output_error(
             "truncated_provider_response",
             "provider response was terminated for length",
+        )
+    if finish_reason == "content_filter":
+        raise _output_error(
+            "filtered_provider_response",
+            "provider response was withheld by a content filter",
         )
     text = "".join(parts)
     if not text.strip():

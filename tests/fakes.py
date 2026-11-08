@@ -19,6 +19,8 @@ from openai.types.chat import ChatCompletionChunk
 from openai.types.chat.chat_completion_chunk import Choice, ChoiceDelta
 from openai.types.completion_usage import CompletionUsage
 
+from atlas_review.contracts import ReviewAttempt, ReviewReport
+from atlas_review.errors import AtlasReviewError
 from atlas_review.inference.client import ProviderReply
 
 _TOKEN = re.compile(r"\S+")
@@ -244,3 +246,60 @@ class FakeChatClient:
     def close(self) -> None:
         """Record that the client was closed."""
         self.closed = True
+
+
+@dataclass(slots=True)
+class RecordingReviewer:
+    """Answer review requests with prepared text or a prepared failure.
+
+    Instance Attributes:
+        text (str): Response text returned when no error is set.
+        error (AtlasReviewError | None): Failure raised instead of a reply.
+        calls (list[tuple[str, str, int, float | None]]): Recorded requests.
+    """
+
+    text: str = '{"schema_version": 1, "summary": "insufficient evidence"}'
+    error: AtlasReviewError | None = None
+    calls: list[tuple[str, str, int, float | None]] = field(default_factory=list)
+
+    def __call__(
+        self,
+        system_prompt: str,
+        user_payload: str,
+        *,
+        output_tokens: int,
+        temperature: float | None,
+    ) -> ProviderReply:
+        """Record the request and return the prepared reply."""
+        self.calls.append((system_prompt, user_payload, output_tokens, temperature))
+        if self.error is not None:
+            raise self.error
+        return ProviderReply(
+            text=self.text,
+            model="fake-model-1",
+            response_id=f"resp-{len(self.calls)}",
+            input_tokens=1000,
+            output_tokens=200,
+            duration_seconds=1.25,
+        )
+
+
+@dataclass(slots=True)
+class RecordingReviewStore:
+    """Record attempts, accepted reports, and failure marks in memory."""
+
+    attempts: list[ReviewAttempt] = field(default_factory=list)
+    reports: list[ReviewReport] = field(default_factory=list)
+    failures: int = 0
+
+    def record(self, attempt: ReviewAttempt) -> None:
+        """Keep one attempt record."""
+        self.attempts.append(attempt)
+
+    def complete(self, report: ReviewReport) -> None:
+        """Keep the accepted report."""
+        self.reports.append(report)
+
+    def fail(self) -> None:
+        """Count one failure mark."""
+        self.failures += 1

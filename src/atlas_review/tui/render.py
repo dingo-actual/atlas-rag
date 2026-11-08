@@ -6,14 +6,20 @@ SQLite, scores records, or builds prompts.
 
 from __future__ import annotations
 
-import re
 from collections.abc import Sequence
+from pathlib import Path
+from urllib.parse import urlsplit
 
-from rich.console import Group, RenderableType
+from rich.console import Console, Group, RenderableType
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
+from atlas_review.config import (
+    PLACEHOLDER_BASE_URL,
+    PLACEHOLDER_MODEL,
+    LLMConfig,
+)
 from atlas_review.contracts import (
     AtlasEntity,
     AtlasRelationship,
@@ -23,11 +29,10 @@ from atlas_review.contracts import (
     StageTiming,
 )
 from atlas_review.corpus.ingest import IngestionOutcome, IngestionPlan
+from atlas_review.errors import AtlasReviewError
+from atlas_review.sanitize import sanitize_text
 from atlas_review.services.ingestion import SourcePreview
 from atlas_review.storage.repository import EntityInspection, GenerationSummary
-
-_TERMINAL_CONTROLS = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
-_ESCAPE_SEQUENCES = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 
 
 def sanitize_terminal_text(value: str) -> str:
@@ -39,8 +44,90 @@ def sanitize_terminal_text(value: str) -> str:
     Returns:
         (str) Text safe to render in a terminal.
     """
-    without_escapes = _ESCAPE_SEQUENCES.sub("", value)
-    return _TERMINAL_CONTROLS.sub("", without_escapes)
+    return sanitize_text(value)
+
+
+def endpoint_host(base_url: str | None) -> str:
+    """Return the host a request would reach, for display only.
+
+    Args:
+        base_url (str | None): Configured API root.
+
+    Returns:
+        (str) Hostname, or a notice when no endpoint is configured.
+    """
+    if base_url is None:
+        return "not configured"
+    return urlsplit(base_url).hostname or "not configured"
+
+
+def inference_label(config: LLMConfig) -> str:
+    """Render the configured endpoint and model for the status header.
+
+    The documented placeholder provider is reported as not configured.
+
+    Args:
+        config (LLMConfig): Stored provider settings.
+
+    Returns:
+        (str) Endpoint host and model, or a not-configured notice.
+    """
+    if (config.base_url, config.model) == (PLACEHOLDER_BASE_URL, PLACEHOLDER_MODEL):
+        return "not configured"
+    return f"{endpoint_host(config.base_url)} / {sanitize_text(config.model)}"
+
+
+def render_status(
+    *, workspace: Path, collection: str, inference: str
+) -> RenderableType:
+    """Render the main-screen header of workspace, corpus, and endpoint state.
+
+    Args:
+        workspace (Path): Workspace directory in use.
+        collection (str): Active ATLAS collection version or a notice.
+        inference (str): Endpoint and model, or a notice.
+
+    Returns:
+        (RenderableType) Compact status panel.
+    """
+    table = Table.grid(padding=(0, 2))
+    table.add_column(style="bold cyan", no_wrap=True)
+    table.add_column(overflow="fold")
+    table.add_row("workspace", sanitize_text(str(workspace)))
+    table.add_row("corpus", sanitize_text(collection))
+    table.add_row("inference", sanitize_text(inference))
+    return Panel(table, title="atlas-review", border_style="cyan")
+
+
+def render_menu(choices: Sequence[tuple[str, str]]) -> RenderableType:
+    """Render the numbered main menu.
+
+    Args:
+        choices (Sequence[tuple[str, str]]): Key and label pairs.
+
+    Returns:
+        (RenderableType) Menu panel.
+    """
+    lines = [f"{key}  {label}" for key, label in choices]
+    return Panel(
+        Text("\n".join(lines), overflow="fold"),
+        title="Main menu",
+        border_style="blue",
+    )
+
+
+def print_error(console: Console, error: AtlasReviewError) -> None:
+    """Render an application failure without exposing stored payloads.
+
+    Args:
+        console (Console): Rich console.
+        error (AtlasReviewError): Expected application failure.
+    """
+    body = [f"{error.message}", f"code: {error.code}  stage: {error.stage}"]
+    body.extend(error.details)
+    if error.recovery:
+        body.append(f"next: {error.recovery}")
+    console.print(Panel("\n".join(body), title="Error", border_style="red"))
 
 
 def render_preview(preview: SourcePreview) -> Panel:

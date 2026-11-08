@@ -26,6 +26,8 @@ ATLAS_TOKEN_PATTERN = r"(?u)\baml\.(?:ta|cs|t|m)\d{4}(?:\.\d{3})?\b|\b\w+\b"
 MAX_SOURCE_BYTES = 20 * 1024 * 1024
 MAX_REQUEST_CHARACTERS = 40000
 SUPPORTED_FORMAT_MAJOR = 6
+PLACEHOLDER_BASE_URL = "https://your-provider.example/v1"
+PLACEHOLDER_MODEL = "your-model-id"
 
 
 class CorpusConfig(AppModel):
@@ -350,7 +352,7 @@ class AppConfig(AppModel):
     reranker: RerankerConfig = Field(default_factory=RerankerConfig)
     llm: LLMConfig = Field(
         default_factory=lambda: LLMConfig(
-            base_url="https://your-provider.example/v1", model="your-model-id"
+            base_url=PLACEHOLDER_BASE_URL, model=PLACEHOLDER_MODEL
         )
     )
     ui: UiConfig = Field(default_factory=UiConfig)
