@@ -18,7 +18,9 @@ from packets import (
     CONTROL,
     EXERCISE,
     FINDING,
+    MITIGATION,
     PARENT,
+    TECHNIQUE,
     default_associations,
     default_items,
     default_packet,
@@ -204,3 +206,53 @@ class TestRejectedReports:
             item.case_type for item in default_packet().items if CASE in item.entity_ids
         }
         assert types == {EXERCISE}
+
+
+class TestCitedDescriptiveEvidence:
+    """A named entity needs a descriptive passage inside the citations that use it."""
+
+    def test_every_named_technique_needs_its_own_cited_description(self) -> None:
+        # E001 describes TECHNIQUE only; the PARENT description E007 is in the packet.
+        report = valid_report(
+            finding(
+                technique_ids=[TECHNIQUE, PARENT],
+                evidence_ids=["E001"],
+                case_study_ids=[],
+                controls=[],
+            )
+        )
+        with pytest.raises(AtlasReviewError) as caught:
+            validate_report(report, default_packet(), max_findings=5)
+        assert (
+            f"F001: no cited evidence describes technique {PARENT}"
+            in caught.value.details
+        )
+
+    def test_case_described_only_outside_the_finding_citations_is_rejected(
+        self,
+    ) -> None:
+        # E002 is the employs card; the E006 case narrative is in the packet but uncited.
+        report = valid_report(finding(evidence_ids=["E001", "E002"], controls=[]))
+        with pytest.raises(AtlasReviewError) as caught:
+            validate_report(report, default_packet(), max_findings=5)
+        assert (
+            f"F001: case study {CASE} has no case description among the cited evidence"
+            in caught.value.details
+        )
+
+    def test_mitigation_described_only_outside_the_control_citations_is_rejected(
+        self,
+    ) -> None:
+        # E004 is the mitigates card; the E003 mitigation text is in the packet but uncited.
+        report = valid_report(
+            finding(
+                case_study_ids=[],
+                controls=[CONTROL | {"evidence_ids": ["E004"]}],
+            )
+        )
+        with pytest.raises(AtlasReviewError) as caught:
+            validate_report(report, default_packet(), max_findings=5)
+        assert (
+            f"F001 control 1: mitigation {MITIGATION} has no description among the "
+            "control's cited evidence" in caught.value.details
+        )

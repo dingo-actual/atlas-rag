@@ -43,8 +43,12 @@ design. Follow these rules.
 - Cite supplied evidence IDs on every finding and on each ATLAS-grounded
   control recommendation.
 - Name a technique, case study, or mitigation ID only when the packet allows
-  it, and name a mitigation only when an allowed association links it to one
-  of that finding's techniques.
+  it. Cite a passage that describes each technique and case study you name in
+  that finding's evidence IDs. Cite a passage that describes each mitigation
+  you name in that control's evidence IDs. A relationship card is not a
+  description.
+- Name a mitigation only when an allowed association links it to one of that
+  finding's techniques.
 - Refer to unresolved architecture facts as questions, not invented details.
 - Return one JSON object that validates against the ReviewReport schema below,
   with no Markdown fence, no surrounding prose, and no extra fields."""

@@ -42,6 +42,8 @@ class TestSystemPrompt:
             "as evidence that a mitigation is effective",
             "zero findings is valid",
             "cite supplied evidence ids",
+            "describes each technique and case study",
+            "describes each mitigation",
         ],
     )
     def test_required_rule_is_stated(self, phrase: str) -> None:

@@ -118,19 +118,13 @@ def _citation_errors(
         for technique_id in finding.technique_ids
         if technique_id not in techniques
     )
-    cited = [
-        items[evidence_id]
-        for evidence_id in finding.evidence_ids
-        if evidence_id in items
-    ]
-    if not any(
-        _describes(item, technique_id)
-        for item in cited
+    cited = _cited_items(finding.evidence_ids, items)
+    errors.extend(
+        f"{finding.finding_id}: no cited evidence describes technique {technique_id}"
         for technique_id in finding.technique_ids
-    ):
-        errors.append(
-            f"{finding.finding_id}: no cited evidence describes a listed technique"
-        )
+        if technique_id in techniques
+        and not any(_describes(item, technique_id) for item in cited)
+    )
     return errors
 
 
@@ -139,14 +133,15 @@ def _case_errors(
 ) -> list[str]:
     """Return unknown or unsupported case-study claims."""
     allowed = set(packet.allowed_entity_ids_by_kind.get("case_study", ()))
+    cited = _cited_items(finding.evidence_ids, items)
     errors: list[str] = []
     for case_id in finding.case_study_ids:
         if case_id not in allowed:
             errors.append(f"{finding.finding_id}: unknown case study {case_id}")
-        elif not any(_describes(item, case_id) for item in items.values()):
+        elif not any(_describes(item, case_id) for item in cited):
             errors.append(
                 f"{finding.finding_id}: case study {case_id} has no case description "
-                "in this packet"
+                "among the cited evidence"
             )
         elif not _linked(packet, "case_study", case_id, finding.technique_ids):
             errors.append(
@@ -171,9 +166,10 @@ def _control_errors(
         if evidence_id not in items
     ]
     allowed = set(packet.allowed_entity_ids_by_kind.get("mitigation", ()))
+    cited = _cited_items(control.evidence_ids, items)
     for mitigation_id in control.mitigation_ids:
         errors.extend(
-            _mitigation_errors(label, mitigation_id, allowed, finding, packet, items)
+            _mitigation_errors(label, mitigation_id, allowed, finding, packet, cited)
         )
     return errors
 
@@ -184,7 +180,7 @@ def _mitigation_errors(
     allowed: set[str],
     finding: ReviewFinding,
     packet: EvidencePacket,
-    items: dict[str, EvidenceItem],
+    cited: list[EvidenceItem],
 ) -> list[str]:
     """Return the problem with one named mitigation, if any."""
     if mitigation_id not in allowed:
@@ -196,11 +192,21 @@ def _mitigation_errors(
                 "cited technique in this packet"
             )
         ]
-    if not any(_describes(item, mitigation_id) for item in items.values()):
+    if not any(_describes(item, mitigation_id) for item in cited):
         return [
-            f"{label}: mitigation {mitigation_id} has no description in this packet"
+            (
+                f"{label}: mitigation {mitigation_id} has no description among the "
+                "control's cited evidence"
+            )
         ]
     return []
+
+
+def _cited_items(
+    evidence_ids: list[str], items: dict[str, EvidenceItem]
+) -> list[EvidenceItem]:
+    """Return the packet items named by the given evidence identifiers."""
+    return [items[evidence_id] for evidence_id in evidence_ids if evidence_id in items]
 
 
 def _describes(item: EvidenceItem, entity_id: str) -> bool:
