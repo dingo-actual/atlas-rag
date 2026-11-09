@@ -30,6 +30,7 @@ from atlas_review.contracts import (
 )
 from atlas_review.corpus.ingest import IngestionOutcome, IngestionPlan
 from atlas_review.errors import AtlasReviewError
+from atlas_review.retrieval.repair import RepairOutcome
 from atlas_review.sanitize import sanitize_text
 from atlas_review.services.ingestion import SourcePreview
 from atlas_review.storage.repository import EntityInspection, GenerationSummary
@@ -249,6 +250,15 @@ def render_ingest_plan(plan: IngestionPlan) -> Panel:
                 style="green",
             )
         )
+    elif plan.repair_required:
+        body.append(
+            Text(
+                "The stored index bundle for this generation is missing or damaged. "
+                "Rebuild it with Inspect > Rebuild indexes; re-ingestion cannot "
+                "replace it.",
+                style="yellow",
+            )
+        )
     elif plan.uncached_context_count:
         body.append(
             Text(
@@ -282,6 +292,27 @@ def render_build_outcome(outcome: IngestionOutcome) -> Panel:
     table.add_row("reused generation", "yes" if outcome.reused_generation else "no")
     table.add_row("bundle", sanitize_terminal_text(outcome.artifact_directory))
     return Panel(table, title="Ingestion complete", border_style="green")
+
+
+def render_repair_outcome(outcome: RepairOutcome) -> Panel:
+    """Render the summary of one explicit index repair.
+
+    Args:
+        outcome (RepairOutcome): Rebuilt bundle summary.
+
+    Returns:
+        (Panel) Panel with counts, bundle path, and request-free assurance.
+    """
+    table = Table.grid(padding=(0, 2))
+    table.add_column(style="bold cyan", no_wrap=True)
+    table.add_column(overflow="fold")
+    table.add_row("generation", outcome.generation_id)
+    table.add_row("passages", str(outcome.passage_count))
+    table.add_row("dense vectors", str(outcome.dense_count))
+    table.add_row("keyword documents", str(outcome.keyword_count))
+    table.add_row("provider requests", "0")
+    table.add_row("bundle", sanitize_terminal_text(outcome.artifact_directory))
+    return Panel(table, title="Indexes rebuilt", border_style="green")
 
 
 def _channel_table(

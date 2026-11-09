@@ -127,6 +127,45 @@ def load_generation(
     )
 
 
+def bundle_is_usable(
+    repository: CorpusRepository,
+    *,
+    passages: PassageRepository,
+    indexes_dir: Path,
+    config: AppConfig,
+    generation_id: str,
+) -> bool:
+    """Return whether a ready generation's published bundle still loads.
+
+    Args:
+        repository (CorpusRepository): Workspace repository.
+        passages (PassageRepository): Passage storage.
+        indexes_dir (Path): Workspace index directory.
+        config (AppConfig): Query-side configuration to compare with the bundle.
+        generation_id (str): Generation to check.
+
+    Returns:
+        (bool) ``True`` when the bundle passes every load-time check.
+
+    Raises:
+        AtlasReviewError: A non-index failure, such as a query-configuration
+            mismatch or a damaged stored record.
+    """
+    try:
+        load_generation(
+            repository,
+            passages=passages,
+            indexes_dir=indexes_dir,
+            config=config,
+            generation_id=generation_id,
+        )
+    except AtlasReviewError as error:
+        if error.stage == STAGE_INDEX:
+            return False
+        raise
+    return True
+
+
 def _read_manifest_bytes(directory: Path, generation_id: str) -> bytes:
     """Read the published bundle manifest bytes or report a missing bundle."""
     try:
@@ -221,6 +260,6 @@ def _selector_error(code: str, message: str) -> AtlasReviewError:
         message=message,
         recovery=(
             "Restore the configured query settings, or rebuild the index bundle "
-            "explicitly from stored vectors and text."
+            "from stored vectors and text with Inspect > Rebuild indexes."
         ),
     )

@@ -44,6 +44,8 @@ from atlas_review.retrieval.embeddings import EmbeddingBackend, FastEmbedBackend
 from atlas_review.retrieval.hybrid import SearchOutcome, check_focus, search
 from atlas_review.retrieval.loader import load_generation
 from atlas_review.retrieval.pipeline import RetrievalRun, retrieve
+from atlas_review.retrieval.repair import RepairOutcome, RepairServices
+from atlas_review.retrieval.repair import rebuild_indexes as rebuild_generation_indexes
 from atlas_review.retrieval.rerank import FastEmbedReranker, Reranker
 from atlas_review.retrieval.tokenizers import TokenCounters, load_token_counters
 from atlas_review.services.ingestion import (
@@ -271,6 +273,7 @@ class WorkspaceSession:
             config=self.config,
             repository=self.repository,
             passages=self.passages,
+            indexes_dir=self.paths.indexes,
             counters=self.token_counters(),
         )
         return PreparedIngestion(
@@ -290,7 +293,11 @@ class WorkspaceSession:
             (IngestionOutcome) Activation summary.
         """
         contextualizer = None
-        if not prepared.plan.reuse_generation and prepared.plan.uncached_context_count:
+        if (
+            not prepared.plan.reuse_generation
+            and not prepared.plan.repair_required
+            and prepared.plan.uncached_context_count
+        ):
             contextualizer = build_contextualizer(
                 self.config.llm,
                 automatic_retries=self.config.contextualization.automatic_retries,
@@ -308,6 +315,26 @@ class WorkspaceSession:
                 backend=self.embedding_backend(),
                 contextualizer=contextualizer,
                 progress=progress,
+            ),
+        )
+
+    def rebuild_indexes(self, generation_id: str) -> RepairOutcome:
+        """Rebuild both indexes of a ready generation from stored data.
+
+        Args:
+            generation_id (str): Ready generation to repair.
+
+        Returns:
+            (RepairOutcome) Rebuilt bundle summary.
+        """
+        return rebuild_generation_indexes(
+            generation_id,
+            services=RepairServices(
+                config=self.config,
+                repository=self.repository,
+                passages=self.passages,
+                indexes_dir=self.paths.indexes,
+                progress=None,
             ),
         )
 

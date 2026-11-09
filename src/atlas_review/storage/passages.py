@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import Sequence
+from dataclasses import dataclass
 
 from atlas_review.contracts import ContextualizationResult, Passage
 from atlas_review.errors import STAGE_STORAGE, AtlasReviewError
@@ -25,6 +26,23 @@ INSERT INTO context_cache (
 ) VALUES (?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (cache_key) DO NOTHING
 """
+
+
+@dataclass(frozen=True, slots=True)
+class StoredIndexRow:
+    """One stored passage as the raw input of a derived index.
+
+    Instance Attributes:
+        passage_id (int): SQLite passage identifier used as the dense key.
+        bm25_ordinal (int): Contiguous ordinal used as the keyword position.
+        retrieval_text (str): Augmented text indexed by BM25.
+        vector (bytes): Explicit little-endian float32 vector blob.
+    """
+
+    passage_id: int
+    bm25_ordinal: int
+    retrieval_text: str
+    vector: bytes
 
 
 class PassageRepository:
@@ -107,6 +125,35 @@ class PassageRepository:
             .fetchall()
         )
         return tuple(decode_model(row["payload_msgpack"], Passage) for row in rows)
+
+    def index_rows(self, generation_id: str) -> tuple[StoredIndexRow, ...]:
+        """Return raw index inputs of one generation in BM25 ordinal order.
+
+        Args:
+            generation_id (str): Stored generation identifier.
+
+        Returns:
+            (tuple[StoredIndexRow, ...]) Passage identifiers, ordinals, text,
+                and vectors in the order both indexes must use.
+        """
+        rows = (
+            self._database.connect()
+            .execute(
+                "SELECT passage_id, bm25_ordinal, retrieval_text, vector_f32_le "
+                "FROM passages WHERE generation_id = ? ORDER BY bm25_ordinal",
+                (generation_id,),
+            )
+            .fetchall()
+        )
+        return tuple(
+            StoredIndexRow(
+                passage_id=int(row["passage_id"]),
+                bm25_ordinal=int(row["bm25_ordinal"]),
+                retrieval_text=str(row["retrieval_text"]),
+                vector=bytes(row["vector_f32_le"]),
+            )
+            for row in rows
+        )
 
     def passage(self, generation_id: str, passage_id: int) -> Passage:
         """Decode one passage or fail with a storage error."""

@@ -17,6 +17,7 @@ from atlas_review.contracts import (
     StageTiming,
 )
 from atlas_review.corpus.ingest import IngestionOutcome, IngestionPlan
+from atlas_review.retrieval.repair import RepairOutcome
 from atlas_review.services.ingestion import preview_source
 from atlas_review.services.session import WorkspaceSession
 from atlas_review.tui.render import (
@@ -26,6 +27,7 @@ from atlas_review.tui.render import (
     render_ingest_plan,
     render_inspection,
     render_preview,
+    render_repair_outcome,
     render_retrieval_trace,
     sanitize_terminal_text,
 )
@@ -133,6 +135,7 @@ PLAN = IngestionPlan(
     cached_context_count=4,
     uncached_context_count=8,
     reuse_generation=False,
+    repair_required=False,
     endpoint_host="provider\x1b[31m.example",
     model="fake-model\x07",
     context_output_tokens=256,
@@ -171,6 +174,7 @@ class TestBuildRendering:
             cached_context_count=12,
             uncached_context_count=0,
             reuse_generation=True,
+            repair_required=False,
             endpoint_host="provider.example",
             model="fake-model",
             context_output_tokens=256,
@@ -184,6 +188,39 @@ class TestBuildRendering:
         assert "generation-1" in rendered
         assert "indexes/generation-1-bundle" in rendered
         assert "12" in rendered
+
+    def test_repair_required_plan_names_the_explicit_action(self) -> None:
+        damaged = IngestionPlan(
+            generation_id="generation-1",
+            settings_fingerprint="a" * 64,
+            chunk_count=12,
+            cached_context_count=12,
+            uncached_context_count=0,
+            reuse_generation=False,
+            repair_required=True,
+            endpoint_host="provider.example",
+            model="fake-model",
+            context_output_tokens=256,
+        )
+        rendered = _text(render_ingest_plan(damaged))
+        assert "Rebuild indexes" in rendered
+        assert "credential" not in rendered
+
+    def test_repair_outcome_reports_counts_and_no_requests(self) -> None:
+        rendered = _text(
+            render_repair_outcome(
+                RepairOutcome(
+                    generation_id="generation-1",
+                    passage_count=12,
+                    dense_count=12,
+                    keyword_count=12,
+                    artifact_directory="indexes/generation-1-repaired",
+                )
+            )
+        )
+        assert "generation-1" in rendered
+        assert "indexes/generation-1-repaired" in rendered
+        assert "0" in rendered
 
 
 TRACE = RetrievalTrace(

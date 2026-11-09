@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 from rich.console import Console
@@ -9,7 +10,6 @@ from rich.prompt import Prompt
 
 from atlas_review.errors import AtlasReviewError
 from atlas_review.services.session import WorkspaceSession
-from atlas_review.storage.reviews import ReviewSummary
 from atlas_review.tui.configuration import edit_configuration
 from atlas_review.tui.render import (
     inference_label,
@@ -20,6 +20,7 @@ from atlas_review.tui.render import (
     render_inspection,
     render_menu,
     render_preview,
+    render_repair_outcome,
     render_status,
     sanitize_terminal_text,
 )
@@ -140,7 +141,7 @@ def _inspect(console: Console, session: WorkspaceSession) -> None:
     """Inspect the stored corpus or reopen and export saved reviews."""
     choice = Prompt.ask(
         "Inspect",
-        choices=["corpus", "reviews", "return"],
+        choices=["corpus", "reviews", "rebuild", "return"],
         default="reviews",
         console=console,
     )
@@ -152,6 +153,31 @@ def _inspect(console: Console, session: WorkspaceSession) -> None:
             console.print(render_inspection(session.inspect(entity_id)))
     elif choice == "reviews":
         _reviews(console, session)
+    elif choice == "rebuild":
+        _rebuild(console, session)
+
+
+def _rebuild(console: Console, session: WorkspaceSession) -> None:
+    """Rebuild one ready generation's indexes from stored data."""
+    summaries = session.generations()
+    console.print(render_generations(summaries))
+    if not summaries:
+        return
+    selected = Prompt.ask(
+        "Generation ID to rebuild, or 'back'", default="back", console=console
+    )
+    summary = _match(summaries, selected, lambda row: row.generation_id)
+    if summary is None:
+        return
+    answer = Prompt.ask(
+        "Rebuild both indexes from stored vectors and text?",
+        choices=["y", "n"],
+        default="n",
+        console=console,
+    )
+    if answer != "y":
+        return
+    console.print(render_repair_outcome(session.rebuild_indexes(summary.generation_id)))
 
 
 def _reviews(console: Console, session: WorkspaceSession) -> None:
@@ -161,7 +187,7 @@ def _reviews(console: Console, session: WorkspaceSession) -> None:
     if not summaries:
         return
     selected = Prompt.ask("Review ID, or 'back'", default="back", console=console)
-    match = _match(summaries, selected)
+    match = _match(summaries, selected, lambda summary: summary.review_id)
     if match is None:
         return
     console.print(
@@ -207,14 +233,12 @@ def _regenerate(console: Console, session: WorkspaceSession, review_id: str) -> 
     )
 
 
-def _match(summaries: tuple[ReviewSummary, ...], selected: str) -> ReviewSummary | None:
-    """Find a saved review by exact identifier or unique prefix."""
+def _match[T](items: Sequence[T], selected: str, key: Callable[[T], str]) -> T | None:
+    """Find a stored record by exact identifier or unique prefix."""
     if selected == "back":
         return None
-    for summary in summaries:
-        if summary.review_id == selected:
-            return summary
-    matches = [
-        summary for summary in summaries if summary.review_id.startswith(selected)
-    ]
+    for item in items:
+        if key(item) == selected:
+            return item
+    matches = [item for item in items if key(item).startswith(selected)]
     return matches[0] if len(matches) == 1 else None

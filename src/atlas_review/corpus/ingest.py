@@ -48,6 +48,7 @@ from atlas_review.corpus.identity import (
 )
 from atlas_review.errors import (
     STAGE_CONTEXT_DOCUMENT,
+    STAGE_INDEX,
     STAGE_INGESTION,
     AtlasReviewError,
 )
@@ -55,6 +56,7 @@ from atlas_review.hashing import sha256_hex
 from atlas_review.inference.client import Contextualizer, ProviderReply
 from atlas_review.retrieval.artifacts import Publication, build_bundle
 from atlas_review.retrieval.embeddings import EmbeddingBackend, passage_vectors
+from atlas_review.retrieval.loader import bundle_is_usable
 from atlas_review.retrieval.tokenizers import TokenCounters
 from atlas_review.storage.passages import PassageRepository
 from atlas_review.storage.repository import CorpusRepository, StoredArtifact
@@ -73,6 +75,7 @@ class IngestionPlan:
         cached_context_count (int): Chunks with a validated cached context.
         uncached_context_count (int): Chunks that need a provider request.
         reuse_generation (bool): An identical ready generation already exists.
+        repair_required (bool): The ready generation's bundle is missing or damaged.
         endpoint_host (str | None): Host that would be called for missing context.
         model (str): Configured model identifier.
         context_output_tokens (int): Output allowance per context request.
@@ -84,6 +87,7 @@ class IngestionPlan:
     cached_context_count: int
     uncached_context_count: int
     reuse_generation: bool
+    repair_required: bool
     endpoint_host: str | None
     model: str
     context_output_tokens: int
@@ -180,6 +184,7 @@ def plan_ingestion(
     config: AppConfig,
     repository: CorpusRepository,
     passages: PassageRepository,
+    indexes_dir: Path,
     counters: TokenCounters,
 ) -> IngestionPlan:
     """Describe one explicit build without calling any model.
@@ -189,6 +194,7 @@ def plan_ingestion(
         config (AppConfig): Stored configuration.
         repository (CorpusRepository): Generation storage.
         passages (PassageRepository): Context-cache storage.
+        indexes_dir (Path): Workspace index directory.
         counters (TokenCounters): Retrieval tokenizers.
 
     Returns:
@@ -196,7 +202,11 @@ def plan_ingestion(
     """
     prepared = prepare_build(corpus, config=config, counters=counters)
     return plan_from_build(
-        prepared, config=config, repository=repository, passages=passages
+        prepared,
+        config=config,
+        repository=repository,
+        passages=passages,
+        indexes_dir=indexes_dir,
     )
 
 
@@ -206,6 +216,7 @@ def plan_from_build(
     config: AppConfig,
     repository: CorpusRepository,
     passages: PassageRepository,
+    indexes_dir: Path,
 ) -> IngestionPlan:
     """Describe one explicit build from already-prepared inputs.
 
@@ -214,13 +225,21 @@ def plan_from_build(
         config (AppConfig): Stored configuration.
         repository (CorpusRepository): Generation storage.
         passages (PassageRepository): Context-cache storage.
+        indexes_dir (Path): Workspace index directory.
 
     Returns:
         (IngestionPlan) Chunk counts, cache reuse, and the target endpoint.
     """
     identifier = generation_id(prepared.settings_fingerprint)
     record = repository.generation(identifier)
-    reuse = record is not None and record.status == "ready"
+    ready = record is not None and record.status == "ready"
+    reuse = ready and bundle_is_usable(
+        repository,
+        passages=passages,
+        indexes_dir=indexes_dir,
+        config=config,
+        generation_id=identifier,
+    )
     cached = (
         len(prepared.chunks)
         if reuse
@@ -235,6 +254,7 @@ def plan_from_build(
         cached_context_count=cached,
         uncached_context_count=len(prepared.chunks) - cached,
         reuse_generation=reuse,
+        repair_required=ready and not reuse,
         endpoint_host=urlsplit(config.llm.base_url).hostname,
         model=config.llm.model,
         context_output_tokens=config.contextualization.output_tokens,
@@ -289,11 +309,14 @@ def run_ingestion(
         config=services.config,
         repository=services.repository,
         passages=services.passages,
+        indexes_dir=services.indexes_dir,
     )
     progress = services.progress if services.progress is not None else _ignore
     if plan.reuse_generation:
         services.repository.activate(plan.generation_id)
         return _reused_outcome(services.repository, plan.generation_id)
+    if plan.repair_required:
+        raise _repair_required_error(plan.generation_id)
     contexts, cached_count, requested_count = _resolve_contexts(prepared, services)
     progress("assembling augmented retrieval text")
     if not prepared.chunks:
@@ -546,6 +569,22 @@ def _reused_outcome(repository: CorpusRepository, identifier: str) -> IngestionO
 def _ignore(message: str) -> None:
     """Discard a progress message when no reporter is supplied."""
     del message
+
+
+def _repair_required_error(identifier: str) -> AtlasReviewError:
+    """Build the error raised when a ready bundle can no longer be loaded."""
+    return AtlasReviewError(
+        code="index_repair_required",
+        stage=STAGE_INDEX,
+        message=(
+            f"generation {identifier} is ready but its index bundle is missing or "
+            "damaged"
+        ),
+        recovery=(
+            "Rebuild both indexes from stored data with the explicit repair action; "
+            "re-ingestion does not replace them."
+        ),
+    )
 
 
 def _no_passages_error() -> AtlasReviewError:

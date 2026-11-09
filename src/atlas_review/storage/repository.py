@@ -241,6 +241,47 @@ class CorpusRepository:
                 (generation_id,),
             )
 
+    def update_artifact(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        manifest: GenerationManifest,
+        artifact: StoredArtifact,
+    ) -> None:
+        """Record a repaired bundle for an already ready generation.
+
+        Args:
+            connection (sqlite3.Connection): Open immediate transaction.
+            manifest (GenerationManifest): Manifest recomputed for the bundle.
+            artifact (StoredArtifact): New bundle location and manifest digest.
+
+        Raises:
+            AtlasReviewError: The generation is not ready or does not exist, so
+                no row was updated.
+        """
+        cursor = connection.execute(
+            """
+            UPDATE generations SET
+                artifact_directory = ?, artifact_manifest_sha256 = ?,
+                passage_count = ?, manifest_msgpack = ?
+            WHERE generation_id = ? AND status = 'ready'
+            """,
+            (
+                artifact.directory,
+                artifact.manifest_sha256,
+                manifest.passage_count,
+                encode_model(manifest),
+                manifest.generation_id,
+            ),
+        )
+        if cursor.rowcount != 1:
+            raise AtlasReviewError(
+                code="generation_not_repairable",
+                stage=STAGE_STORAGE,
+                message=f"generation {manifest.generation_id} is not ready",
+                recovery="Re-ingest the source or select a ready generation.",
+            )
+
     def generation(self, generation_id: str) -> GenerationRecord | None:
         """Return the stored identity of one generation, if it exists."""
         row = (
@@ -272,6 +313,25 @@ class CorpusRepository:
         if directory is None or digest is None:
             return None
         return StoredArtifact(directory=str(directory), manifest_sha256=str(digest))
+
+    def artifact_is_referenced(self, directory: str) -> bool:
+        """Return whether any stored generation records this bundle path.
+
+        Args:
+            directory (str): Bundle path relative to the workspace.
+
+        Returns:
+            (bool) ``True`` when at least one generation row references it.
+        """
+        row = (
+            self._database.connect()
+            .execute(
+                "SELECT 1 FROM generations WHERE artifact_directory = ? LIMIT 1",
+                (directory,),
+            )
+            .fetchone()
+        )
+        return row is not None
 
     def active_generation_id(self) -> str | None:
         """Return the active generation identifier, if the workspace has one."""

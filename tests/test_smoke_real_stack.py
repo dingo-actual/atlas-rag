@@ -12,18 +12,19 @@ SQLite, and msgspec are all real.
 from __future__ import annotations
 
 import os
+from collections.abc import Sequence
 from pathlib import Path
 
 import numpy as np
 import pytest
 
 from atlas_review.config import EMBEDDING_DIMENSION, AppConfig
-from atlas_review.contracts import ReviewRequest
+from atlas_review.contracts import Passage, ReviewRequest
 from atlas_review.corpus.atlas_v6 import ParsedCorpus
 from atlas_review.corpus.ingest import BuildServices, run_ingestion
 from atlas_review.retrieval.embeddings import FastEmbedBackend, query_vector
 from atlas_review.retrieval.hybrid import check_focus
-from atlas_review.retrieval.loader import load_generation
+from atlas_review.retrieval.loader import LoadedGeneration, load_generation
 from atlas_review.retrieval.pipeline import retrieve
 from atlas_review.retrieval.rerank import FastEmbedReranker
 from atlas_review.services.session import WorkspaceSession
@@ -108,13 +109,7 @@ def test_real_stack_builds_and_searches(
         )
 
         narrow = _narrow(session.config)
-        loaded = load_generation(
-            session.repository,
-            passages=session.passages,
-            indexes_dir=session.paths.indexes,
-            config=session.config,
-            generation_id=outcome.generation_id,
-        )
+        loaded = _repaired_bundle(session, outcome.generation_id, stored)
         single = retrieve(
             loaded,
             backend,
@@ -146,6 +141,25 @@ def test_real_stack_builds_and_searches(
             check_focus(brief.retrieval_focus, counters, session.config)
     finally:
         session.close()
+
+
+def _repaired_bundle(
+    session: WorkspaceSession, generation_id: str, stored: Sequence[Passage]
+) -> LoadedGeneration:
+    """Rebuild both indexes from SQLite, then load the repaired bundle."""
+    repaired = session.rebuild_indexes(generation_id)
+    assert repaired.passage_count == len(stored)
+    assert repaired.dense_count == len(stored)
+    assert repaired.keyword_count == len(stored)
+    loaded = load_generation(
+        session.repository,
+        passages=session.passages,
+        indexes_dir=session.paths.indexes,
+        config=session.config,
+        generation_id=generation_id,
+    )
+    assert loaded.passage_ids == tuple(passage.passage_id for passage in stored)
+    return loaded
 
 
 def _narrow(config: AppConfig) -> AppConfig:

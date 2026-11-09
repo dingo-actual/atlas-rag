@@ -72,6 +72,7 @@ class Builder:
             config=config or self.session.config,
             repository=self.session.repository,
             passages=self.session.passages,
+            indexes_dir=self.session.paths.indexes,
             counters=self.counters,
         )
 
