@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 
 import pytest
 
-from atlas_review.config import AppConfig
+from atlas_review.config import AppConfig, LLMConfig
 from atlas_review.contracts import ChunkingIdentity
 from atlas_review.corpus.atlas_v6 import ParsedCorpus
 from atlas_review.corpus.chunk import build_source_chunks
@@ -19,6 +21,7 @@ from atlas_review.corpus.ingest import (
 )
 from atlas_review.errors import AtlasReviewError
 from atlas_review.retrieval.tokenizers import TokenCounters
+from atlas_review.services import session as session_module
 from atlas_review.services.session import WorkspaceSession
 from fakes import FixedContextualizer, RecordingEmbedder
 
@@ -316,3 +319,30 @@ class TestQueryText:
             for text in batch
         )
         assert all(len(batch) > 1 for batch in builder.embedder.inputs)
+
+
+def test_build_generation_passes_the_configured_retries_and_reporter(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_session: WorkspaceSession,
+    source_path: Path,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def factory(
+        _config: LLMConfig,
+        *,
+        automatic_retries: int = 0,
+        notify: Callable[[str], None] | None = None,
+    ) -> FixedContextualizer:
+        captured.update(retries=automatic_retries, notify=notify)
+        return FixedContextualizer()
+
+    fake_session.save_config(
+        changed_config(fake_session.config, "contextualization", automatic_retries=3)
+    )
+    monkeypatch.setattr(session_module, "build_contextualizer", factory)
+    prepared = fake_session.prepare_ingestion(source_path)
+    progress: list[str] = []
+    fake_session.build_generation(prepared, progress=progress.append)
+    assert captured["retries"] == 3
+    assert captured["notify"] == progress.append

@@ -79,6 +79,7 @@ class TestPreviewRendering:
         rendered = _text(render_preview(preview))
         assert "/fixtures/mini_atlas_v6.yaml" in rendered
         assert corpus.snapshot.source_sha256 in rendered
+        assert corpus.snapshot.acquired_at in rendered
         assert "Apache-2.0" in rendered
         assert "technique=3" in rendered
         assert "employs=3" in rendered

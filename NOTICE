@@ -1,0 +1,73 @@
+atlas-review — third-party notices
+=================================
+
+This repository contains application code plus small adapted excerpts of
+third-party material. Third-party material stays under its own license and
+attribution terms described below. Nothing here implies endorsement by the
+upstream projects.
+
+1. MITRE ATLAS data
+-------------------
+
+Source: MITRE ATLAS data repository
+  https://github.com/mitre-atlas/atlas-data
+  https://atlas.mitre.org/
+Snapshot: dist/v6/ATLAS-2026.09.yaml
+  commit 3259f388d19cbcca11bacf12a0ef97f4198f711b
+  Git blob SHA-1 06842b2b9f9048ed09e3c257138cc4e4aeb7d27c
+  collection version 2026.09, format version 6.0.0
+License: Apache License 2.0
+
+Files that contain or adapt ATLAS material:
+  - fixtures/mini_atlas_v6.yaml (attributed excerpt adapted for tests)
+  - examples/reports/*.md (recorded review quoting stored ATLAS excerpts)
+  - test evidence produced at run time from an ingested ATLAS source
+
+The application downloads or reads ATLAS YAML at run time; it does not
+redistribute the full upstream collection in this repository. The excerpt in
+`fixtures/` keeps its upstream attribution comment. ATLAS copyright and
+license notices are retained with the adapted material. Apache License 2.0
+text: https://www.apache.org/licenses/LICENSE-2.0
+
+2. Retrieval models (downloaded at run time, not redistributed)
+--------------------------------------------------------------
+
+- `BAAI/bge-base-en-v1.5` embedding model, BAAI. MIT license.
+  https://huggingface.co/BAAI/bge-base-en-v1.5
+- `Xenova/ms-marco-MiniLM-L-12-v2` cross-encoder reranker, Xenova. Apache
+  License 2.0.
+  https://huggingface.co/Xenova/ms-marco-MiniLM-L-12-v2
+
+FastEmbed may resolve these logical names to optimized ONNX exports from a
+different repository. The application records the logical names and the
+resolved tokenizer artifact hashes in its generation manifest. Check the
+downloaded artifact repository for its own notices.
+
+3. Software dependencies
+------------------------
+
+Installed from `pyproject.toml` / `uv.lock`; each distribution ships its own
+license text in the Python environment. Principal dependencies:
+
+| Package | License |
+|---|---|
+| fastembed | Apache-2.0 |
+| usearch | Apache-2.0 |
+| bm25s | MIT |
+| rustworkx | Apache-2.0 |
+| pydantic | MIT |
+| msgspec | BSD-3-Clause |
+| openai | Apache-2.0 |
+| tokenizers | Apache-2.0 |
+| numpy | BSD-3-Clause (plus bundled component licenses) |
+| onnxruntime | MIT |
+| rich | MIT |
+| pyyaml | MIT |
+
+4. User-provided content
+------------------------
+
+Application briefs, ingested sources, generated reviews, and exported reports
+remain the responsibility of the person who supplied or generated them.
+Exported reports quote ATLAS text and keep the attribution line shown in their
+evidence appendix.

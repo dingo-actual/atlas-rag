@@ -12,6 +12,7 @@ from atlas_review.errors import AtlasReviewError
 from atlas_review.services.session import WorkspaceSession
 from atlas_review.services.settings import load_config, save_config
 from atlas_review.storage.database import WorkspaceDatabase
+from atlas_review.storage.schema import SCHEMA_VERSION
 
 
 class TestFreshWorkspace:
@@ -24,7 +25,7 @@ class TestFreshWorkspace:
         assert session.paths.indexes.is_dir()
         assert session.paths.models.is_dir()
         assert session.paths.exports.is_dir()
-        assert session.database.schema_version() == 2
+        assert session.database.schema_version() == SCHEMA_VERSION
         assert session.config == AppConfig()
         assert session.generations() == ()
         assert session.current_generation_id() is None
@@ -117,11 +118,11 @@ class TestSchemaSafety:
     def test_newer_schema_version_is_refused_without_modification(
         self, workspace_root: Path
     ) -> None:
-        workspace_root.mkdir(parents=True)
+        workspace_root.mkdir(parents=True, exist_ok=True)
         path = workspace_root / "atlas.sqlite3"
         with sqlite3.connect(path) as connection:
             connection.execute("CREATE TABLE foreign_table (id INTEGER)")
-            connection.execute("PRAGMA user_version = 3")
+            connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION + 1}")
         with pytest.raises(AtlasReviewError) as caught:
             WorkspaceDatabase(path).connect()
         assert caught.value.code == "unsupported_database_schema"

@@ -147,6 +147,7 @@ def render_preview(preview: SourcePreview) -> Panel:
     table.add_row("sha256", preview.source_sha256)
     table.add_row("format", sanitize_terminal_text(preview.format_version))
     table.add_row("collection", sanitize_terminal_text(preview.collection_version))
+    table.add_row("acquired", sanitize_terminal_text(preview.acquired_at))
     table.add_row(
         "license", sanitize_terminal_text(preview.license_id or "unspecified")
     )

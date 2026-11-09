@@ -1,8 +1,8 @@
-"""Authoritative SQLite schema for a version 2 workspace."""
+"""Authoritative SQLite schema for a version 3 workspace."""
 
 from __future__ import annotations
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 SCHEMA_SQL = """
 PRAGMA foreign_keys = ON;
@@ -41,7 +41,8 @@ CREATE TABLE entities (
     generation_id TEXT NOT NULL REFERENCES generations(generation_id),
     entity_id TEXT NOT NULL,
     kind TEXT NOT NULL CHECK (kind IN
-        ('collection', 'matrix', 'tactic', 'technique', 'mitigation', 'case_study')),
+        ('collection', 'matrix', 'tactic', 'technique', 'mitigation',
+         'case_study', 'software', 'entity')),
     name TEXT NOT NULL,
     display_name TEXT NOT NULL,
     source_locator TEXT NOT NULL,
@@ -56,7 +57,8 @@ CREATE TABLE edges (
     source_id TEXT NOT NULL,
     target_id TEXT NOT NULL,
     relation TEXT NOT NULL CHECK (relation IN
-        ('employs', 'mitigates', 'specializes', 'achieves', 'sequences')),
+        ('employs', 'mitigates', 'specializes', 'achieves', 'sequences',
+         'uses', 'attributed-to', 'implements', 'reported-by')),
     step_id TEXT,
     source_locator TEXT NOT NULL,
     payload_msgpack BLOB NOT NULL,
@@ -136,5 +138,5 @@ CREATE TABLE review_attempts (
     PRIMARY KEY (review_id, attempt_number)
 );
 
-PRAGMA user_version = 2;
+PRAGMA user_version = 3;
 """

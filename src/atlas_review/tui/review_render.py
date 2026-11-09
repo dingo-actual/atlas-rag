@@ -331,6 +331,12 @@ def render_configuration(
         "temperature",
         "provider default" if config.temperature is None else str(config.temperature),
     )
+    table.add_row(
+        "reasoning effort",
+        "provider default"
+        if config.reasoning_effort is None
+        else config.reasoning_effort,
+    )
     table.add_row("timeout", f"{config.timeout_seconds:g}s")
     table.add_row("request budget", f"{config.max_input_characters} characters")
     return Panel(table, title="Inference configuration", border_style="blue")

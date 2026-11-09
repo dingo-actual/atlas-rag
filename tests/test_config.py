@@ -46,6 +46,8 @@ def test_default_config_satisfies_fixed_requirements() -> None:
     assert config.keyword_index.method == "lucene"
     assert config.reranker.model_name == "Xenova/ms-marco-MiniLM-L-12-v2"
     assert config.contextualization.enabled is True
+    assert config.contextualization.automatic_retries == 5
+    assert config.llm.automatic_retries == 5
     assert config.retrieval.fusion_rrf_k == 60
     assert config.llm.api_key_env == "ATLAS_REVIEW_API_KEY"
 
@@ -92,7 +94,16 @@ def test_config_json_round_trip() -> None:
             "contextualization", {"concurrency": 4}, "sequential", id="concurrency"
         ),
         pytest.param(
-            "contextualization", {"automatic_retries": 2}, "retries", id="retries"
+            "contextualization",
+            {"automatic_retries": 6},
+            "automatic_retries",
+            id="context-retries-above-cap",
+        ),
+        pytest.param(
+            "llm",
+            {"automatic_retries": -1},
+            "automatic_retries",
+            id="llm-retries-negative",
         ),
         pytest.param(
             "keyword_index", {"method": "robertson"}, "lucene", id="bm25-method"
@@ -156,6 +167,12 @@ def test_config_json_round_trip() -> None:
             id="bad-env-name",
         ),
         pytest.param("llm", {"output_tokens": 0}, "output_tokens", id="output-tokens"),
+        pytest.param(
+            "llm",
+            {"reasoning_effort": "extreme"},
+            "reasoning_effort",
+            id="reasoning-effort",
+        ),
         pytest.param("llm", {"timeout_seconds": 0.0}, "timeout_seconds", id="timeout"),
         pytest.param("ui", {"page_size": 0}, "page_size", id="page-size"),
     ],
@@ -188,6 +205,17 @@ def test_config_rejects_unknown_section_field() -> None:
         AppConfig.model_validate(
             config_with("retrieval", {"additional": 1}), strict=True
         )
+
+
+@pytest.mark.parametrize("section", ["contextualization", "llm"])
+@pytest.mark.parametrize("retries", [0, 5])
+def test_config_accepts_retry_counts_within_the_bound(
+    section: str, retries: int
+) -> None:
+    config = AppConfig.model_validate(
+        config_with(section, {"automatic_retries": retries}), strict=True
+    )
+    assert getattr(config, section).automatic_retries == retries
 
 
 def test_provider_settings_replace_only_the_llm_section() -> None:

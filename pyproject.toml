@@ -36,6 +36,7 @@ testpaths = ["tests"]
 addopts = "--disable-socket -m 'not smoke'"
 markers = [
     "smoke: requires model downloads and network access (opt-in)",
+    "llm: makes live provider requests (opt-in with --llm)",
 ]
 
 [dependency-groups]

@@ -40,6 +40,7 @@ _RELATIONSHIP_FIELDS = frozenset(
         "tactic",
         "leads-to",
         "position",
+        "activity-purpose",
     }
 )
 
@@ -191,6 +192,9 @@ def _edge(
         context.warnings.extend(marker_warnings)
     step_id = normalize_optional(as_optional_text(data.get("step-id")))
     tactic_id = normalize_optional(as_optional_text(data.get("tactic")))
+    activity_purpose = normalize_optional(
+        as_optional_text(data.get("activity-purpose"))
+    )
     if tactic_id is not None:
         _warn_unknown_tactic(tactic_id, owner, context)
     return AtlasRelationship(
@@ -212,6 +216,7 @@ def _edge(
         description=description,
         step_id=step_id,
         tactic_id=tactic_id,
+        activity_purpose=activity_purpose,
         position=_position(relation, data.get("position"), index, locator),
         leads_to=_leads_to(data.get("leads-to"), locator),
         source_locator=locator,
@@ -222,13 +227,16 @@ def _edge(
 def _check_endpoint_kinds(
     relation: RelationName, source: RawRecord, target: RawRecord, locator: str
 ) -> None:
-    """Reject edges whose endpoints have the wrong record kinds."""
-    expected_source, expected_target = RELATION_ENDPOINTS[relation]
-    if source.kind != expected_source or target.kind != expected_target:
+    """Reject edges whose endpoints are not an allowed pair for the relation."""
+    allowed = RELATION_ENDPOINTS[relation]
+    if (source.kind, target.kind) not in allowed:
+        expected = " or ".join(
+            f"{expected_source} to {expected_target}"
+            for expected_source, expected_target in sorted(allowed)
+        )
         raise source_error(
             "relationship_endpoint_kind",
-            f"relationship {relation!r} must connect {expected_source} to "
-            f"{expected_target}",
+            f"relationship {relation!r} must connect {expected}",
             (locator,),
         )
 

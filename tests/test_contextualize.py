@@ -152,7 +152,7 @@ class TestCacheIdentity:
     @pytest.mark.parametrize(
         "change",
         [
-            pytest.param({"prompt_version": "chunk-context-v2"}, id="prompt"),
+            pytest.param({"prompt_version": "chunk-context-v3"}, id="prompt"),
             pytest.param({"regeneration_revision": 1}, id="revision"),
             pytest.param({"output_tokens": 512}, id="output-tokens"),
             pytest.param({"context_max_tokens": 64}, id="context-limit"),
@@ -199,6 +199,33 @@ class TestCacheIdentity:
                 "llm": {
                     **default.llm.model_dump(mode="python"),
                     "model": "other-model",
+                },
+            },
+            strict=False,
+        )
+        assert context_cache_key(
+            document=documents[step.owner_id],
+            chunk=step,
+            config=default,
+            counters=COUNTERS,
+        ) != context_cache_key(
+            document=documents[step.owner_id],
+            chunk=step,
+            config=changed,
+            counters=COUNTERS,
+        )
+
+    def test_changed_reasoning_effort_changes_the_key(
+        self, chunks: tuple[SourceChunk, ...], documents: dict[str, ContextDocument]
+    ) -> None:
+        default = AppConfig()
+        step = _chunk(chunks, None, "employs", 0)
+        changed = AppConfig.model_validate(
+            {
+                **default.model_dump(mode="python"),
+                "llm": {
+                    **default.llm.model_dump(mode="python"),
+                    "reasoning_effort": "high",
                 },
             },
             strict=False,
@@ -278,6 +305,10 @@ class TestUserPayload:
         case = _chunk(chunks, "AML.CS0035", "description", 0)
         payload = json.loads(build_user_payload(documents[case.owner_id], case))
         assert payload["document"]["owner"]["id"] == "AML.CS0035"
+        assert (
+            payload["allowed_support_locators"]
+            == documents[case.owner_id].support_locators
+        )
         assert payload["target"]["locator"] == case.source_locator
         assert payload["target"]["header"] == case.header
         assert payload["target"]["text"] == case.text

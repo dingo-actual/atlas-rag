@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from atlas_review.contracts import (
+    AssociatedEntity,
     AtlasEntity,
     AtlasRelationship,
     JsonValue,
@@ -29,6 +30,7 @@ from atlas_review.corpus.normalize import (
 from atlas_review.corpus.relationships import collect_edges, validate_steps
 from atlas_review.corpus.source_support import (
     OBJECT_TYPES,
+    OPTIONAL_SECTION_KINDS,
     SECTION_KINDS,
     EntityKind,
     ParseContext,
@@ -69,9 +71,19 @@ _ENTITY_FIELDS = frozenset(
         "target",
         "date",
         "date-granularity",
+        "case-study",
         "attack-reference",
         "reporter",
         "version",
+        "software-type",
+        "software-categories",
+        "aliases",
+        "entity-type",
+        "associated-entities",
+        "start-date",
+        "end-date",
+        "start-date-granularity",
+        "end-date-granularity",
     }
 )
 
@@ -197,6 +209,9 @@ def _collect_records(
     ]
     for section, kind in SECTION_KINDS.items():
         records.extend(_section_records(document, section, kind, warnings))
+    for section, kind in OPTIONAL_SECTION_KINDS.items():
+        if section in document:
+            records.extend(_section_records(document, section, kind, warnings))
     seen: set[str] = set()
     for record in records:
         if record.record_id in seen:
@@ -384,8 +399,21 @@ def _entity(record: RawRecord, generation_id: str, warnings: list[str]) -> Atlas
         case_target=as_optional_text(data.get("target")),
         case_date=as_optional_text(data.get("date")),
         case_date_granularity=as_optional_text(data.get("date-granularity")),
+        case_start_date=as_optional_text(data.get("start-date")),
+        case_start_date_granularity=as_optional_text(
+            data.get("start-date-granularity")
+        ),
+        case_end_date=as_optional_text(data.get("end-date")),
+        case_end_date_granularity=as_optional_text(data.get("end-date-granularity")),
         attack_reference=_attack_reference(data.get("attack-reference")),
         reporter=as_optional_text(data.get("reporter")),
+        software_type=as_optional_text(data.get("software-type")),
+        software_categories=string_list(data.get("software-categories")),
+        aliases=string_list(data.get("aliases")),
+        entity_type=as_optional_text(data.get("entity-type")),
+        associated_entities=_associated_entities(
+            data.get("associated-entities"), record.locator, warnings
+        ),
     )
 
 
@@ -394,3 +422,29 @@ def _attack_reference(raw: Any) -> str | None:
     if isinstance(raw, Mapping):
         return as_optional_text(raw.get("id"))
     return None
+
+
+def _associated_entities(
+    raw: Any, locator: str, warnings: list[str]
+) -> list[AssociatedEntity]:
+    """Read an entity's cross-references, warning instead of failing on bad data."""
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        warnings.append(f"ignored malformed associated entities at {locator}")
+        return []
+    entities: list[AssociatedEntity] = []
+    for index, item in enumerate(raw):
+        path = f"{locator}/associated-entities/{index}"
+        if not isinstance(item, Mapping):
+            warnings.append(f"ignored malformed associated entity at {path}")
+            continue
+        entity_id = item.get("id")
+        name = item.get("name")
+        if not isinstance(entity_id, str) or not isinstance(name, str):
+            warnings.append(
+                f"ignored associated entity without an identifier and name at {path}"
+            )
+            continue
+        entities.append(AssociatedEntity(entity_id=entity_id, name=name))
+    return entities

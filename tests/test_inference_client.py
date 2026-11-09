@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from typing import cast
 
 import pytest
-from openai import OpenAI, omit
+from openai import OpenAI, OpenAIError, omit
 from openai.types.chat import ChatCompletionChunk
 from openai.types.chat.chat_completion_chunk import (
     Choice,
@@ -20,11 +21,13 @@ from atlas_review.inference.client import (
     MAX_CONTEXT_RESPONSE_BYTES,
     MAX_REVIEW_RESPONSE_BYTES,
     PLACEHOLDER_API_KEY,
+    RETRY_BASE_DELAY_SECONDS,
     ChatContextualizer,
     MissingProviderCredentialError,
     build_contextualizer,
     build_reviewer,
     collect_stream,
+    is_transient_provider_error,
     resolve_api_key,
 )
 from fakes import FakeChatClient, FakeCompletions, FinishReason, stream_chunks
@@ -46,15 +49,33 @@ def contextualizer(
     return adapter(config, chunks)
 
 
+@dataclass(slots=True)
+class Retries:
+    """Record retry notices and backoff waits for one adapter.
+
+    Instance Attributes:
+        limit (int): Configured automatic retry count.
+        notices (list[str]): Notices reported before each retry.
+        sleeps (list[float]): Backoff waits in order.
+    """
+
+    limit: int = 0
+    notices: list[str] = field(default_factory=list)
+    sleeps: list[float] = field(default_factory=list)
+
+
 def adapter(
     config: LLMConfig,
     chunks: tuple[ChatCompletionChunk, ...],
     *,
     max_response_bytes: int = MAX_CONTEXT_RESPONSE_BYTES,
     request_json_mode: bool = False,
+    errors: tuple[OpenAIError | None, ...] = (),
+    retries: Retries | None = None,
 ) -> tuple[ChatContextualizer, FakeCompletions]:
     """Return an adapter bound to a recording fake client."""
-    completions = FakeCompletions(chunks=chunks)
+    recording = Retries() if retries is None else retries
+    completions = FakeCompletions(chunks=chunks, errors=errors)
     client = cast("OpenAI", FakeChatClient(completions=completions))
     return (
         ChatContextualizer(
@@ -62,6 +83,9 @@ def adapter(
             client,
             max_response_bytes=max_response_bytes,
             request_json_mode=request_json_mode,
+            automatic_retries=recording.limit,
+            notify=recording.notices.append,
+            sleep=recording.sleeps.append,
         ),
         completions,
     )
@@ -264,6 +288,7 @@ class TestStreamedRequest:
         assert call["stream_options"] == {"include_usage": True}
         assert call[parameter] == 64
         assert call["temperature"] == 0.2
+        assert call["reasoning_effort"] == "medium"
         assert call["model"] == "fake-model-1"
         assert "tools" not in call
         assert call["response_format"] is omit
@@ -272,6 +297,25 @@ class TestStreamedRequest:
         client, completions = contextualizer(CONFIG, stream_chunks(["ok"]))
         client("system", "user", output_tokens=32, temperature=None)
         assert completions.calls[0]["temperature"] is omit
+
+    @pytest.mark.parametrize(
+        "effort",
+        [
+            pytest.param(None, id="provider-default"),
+            pytest.param("medium", id="medium"),
+        ],
+    )
+    def test_reasoning_effort_is_sent_only_when_configured(
+        self, effort: str | None
+    ) -> None:
+        config = provider(reasoning_effort=effort)
+        client, completions = contextualizer(config, stream_chunks(["ok"]))
+        client("system", "user", output_tokens=32, temperature=None)
+        sent = completions.calls[0]["reasoning_effort"]
+        if effort is None:
+            assert sent is omit
+        else:
+            assert sent == effort
 
     def test_assembled_stream_becomes_the_reply(self) -> None:
         client, _ = contextualizer(CONFIG, stream_chunks(["a", "b"], usage=(9, 2)))
@@ -342,3 +386,112 @@ class TestReviewRequestOptions:
             assert contextualizer_adapter.request_json_mode is False
         finally:
             contextualizer_adapter.close()
+
+
+class ProviderStatusError(OpenAIError):
+    """Stand-in for a provider failure that carries an HTTP status code."""
+
+    def __init__(self, status_code: int) -> None:
+        """Record the status code the SDK would report."""
+        super().__init__(f"provider returned HTTP {status_code}")
+        self.status_code = status_code
+
+
+class TestTransientRetries:
+    """Only transient provider failures are repeated, and only within the limit."""
+
+    @pytest.mark.parametrize("status_code", [429, 500, 503])
+    def test_a_retryable_failure_is_retried_before_succeeding(
+        self, status_code: int
+    ) -> None:
+        retries = Retries(limit=1)
+        client, completions = adapter(
+            CONFIG,
+            stream_chunks(["a supported contextual note"]),
+            errors=(ProviderStatusError(status_code),),
+            retries=retries,
+        )
+        reply = client("system", "user", output_tokens=64, temperature=None)
+        assert reply.text == "a supported contextual note"
+        assert len(completions.calls) == 2
+        assert retries.sleeps == [RETRY_BASE_DELAY_SECONDS]
+        assert retries.notices == [
+            f"provider ProviderStatusError from {CONFIG.model}; retry 1/1 in 2s"
+        ]
+
+    @pytest.mark.parametrize("status_code", [400, 401, 404, 422])
+    def test_a_rejected_request_is_not_retried(self, status_code: int) -> None:
+        retries = Retries(limit=2)
+        client, completions = adapter(
+            CONFIG,
+            stream_chunks(["unused"]),
+            errors=(ProviderStatusError(status_code),),
+            retries=retries,
+        )
+        with pytest.raises(AtlasReviewError) as caught:
+            client("system", "user", output_tokens=64, temperature=None)
+        assert caught.value.code == "provider_request_failed"
+        assert len(completions.calls) == 1
+        assert retries.notices == []
+
+    def test_the_retry_limit_bounds_the_repeated_requests(self) -> None:
+        retries = Retries(limit=2)
+        failures = tuple(ProviderStatusError(500) for _ in range(4))
+        client, completions = adapter(
+            CONFIG,
+            stream_chunks(["unused"]),
+            errors=failures,
+            retries=retries,
+        )
+        with pytest.raises(AtlasReviewError) as caught:
+            client("system", "user", output_tokens=64, temperature=None)
+        assert caught.value.code == "provider_request_failed"
+        assert len(completions.calls) == 3
+        assert retries.sleeps == [
+            RETRY_BASE_DELAY_SECONDS,
+            RETRY_BASE_DELAY_SECONDS * 2,
+        ]
+
+    def test_zero_retries_sends_exactly_one_request(self) -> None:
+        client, completions = adapter(
+            CONFIG,
+            stream_chunks(["unused"]),
+            errors=(ProviderStatusError(503),),
+            retries=Retries(limit=0),
+        )
+        with pytest.raises(AtlasReviewError):
+            client("system", "user", output_tokens=64, temperature=None)
+        assert len(completions.calls) == 1
+
+    @pytest.mark.parametrize(
+        ("status_code", "expected"),
+        [
+            pytest.param(429, True, id="rate-limit"),
+            pytest.param(500, True, id="server-error"),
+            pytest.param(503, True, id="unavailable"),
+            pytest.param(400, False, id="bad-request"),
+            pytest.param(401, False, id="unauthenticated"),
+            pytest.param(404, False, id="not-found"),
+        ],
+    )
+    def test_transient_classification_follows_the_status_code(
+        self, status_code: int, expected: bool
+    ) -> None:
+        assert is_transient_provider_error(ProviderStatusError(status_code)) is (
+            expected
+        )
+
+    def test_built_adapters_carry_their_retry_counts(self) -> None:
+        notices: list[str] = []
+        config = provider(api_key_mode="none", api_key_env=None)
+        reviewer = build_reviewer(config)
+        context = build_contextualizer(
+            config, automatic_retries=4, notify=notices.append
+        )
+        try:
+            assert reviewer.automatic_retries == config.automatic_retries
+            assert context.automatic_retries == 4
+            assert context.notify == notices.append
+        finally:
+            reviewer.close()
+            context.close()

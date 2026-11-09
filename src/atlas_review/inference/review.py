@@ -157,6 +157,7 @@ def _attempt(
         output_token_parameter=config.output_token_parameter,
         output_tokens=config.output_tokens,
         temperature=config.temperature,
+        reasoning_effort=config.reasoning_effort,
         response_format_mode=config.response_format_mode,
         max_findings=config.max_findings,
         request_characters=len(prompt.system) + len(prompt.user),

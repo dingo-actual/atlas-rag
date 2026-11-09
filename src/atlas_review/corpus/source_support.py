@@ -21,15 +21,36 @@ SUPPORTED_FORMAT_MAJOR = 6
 DOWNLOAD_URL = "https://github.com/mitre-atlas/atlas-data"
 
 EntityKind = Literal[
-    "collection", "matrix", "tactic", "technique", "mitigation", "case_study"
+    "collection",
+    "matrix",
+    "tactic",
+    "technique",
+    "mitigation",
+    "case_study",
+    "software",
+    "entity",
 ]
-RelationName = Literal["employs", "mitigates", "specializes", "achieves", "sequences"]
+RelationName = Literal[
+    "employs",
+    "mitigates",
+    "specializes",
+    "achieves",
+    "sequences",
+    "uses",
+    "attributed-to",
+    "implements",
+    "reported-by",
+]
 
 SECTION_KINDS: dict[str, EntityKind] = {
     "tactics": "tactic",
     "techniques": "technique",
     "mitigations": "mitigation",
     "case-studies": "case_study",
+}
+OPTIONAL_SECTION_KINDS: dict[str, EntityKind] = {
+    "entities": "entity",
+    "software": "software",
 }
 OBJECT_TYPES: dict[EntityKind, str] = {
     "collection": "collection",
@@ -38,13 +59,25 @@ OBJECT_TYPES: dict[EntityKind, str] = {
     "technique": "technique",
     "mitigation": "mitigation",
     "case_study": "case-study",
+    "software": "software",
+    "entity": "entity",
 }
-RELATION_ENDPOINTS: dict[RelationName, tuple[EntityKind, EntityKind]] = {
-    "employs": ("case_study", "technique"),
-    "mitigates": ("mitigation", "technique"),
-    "specializes": ("technique", "technique"),
-    "achieves": ("technique", "tactic"),
-    "sequences": ("matrix", "tactic"),
+RELATION_ENDPOINTS: dict[RelationName, frozenset[tuple[EntityKind, EntityKind]]] = {
+    "employs": frozenset({("case_study", "technique")}),
+    "mitigates": frozenset({("mitigation", "technique")}),
+    "specializes": frozenset({("technique", "technique")}),
+    "achieves": frozenset({("technique", "tactic")}),
+    "sequences": frozenset({("matrix", "tactic")}),
+    "uses": frozenset(
+        {
+            ("case_study", "software"),
+            ("entity", "software"),
+            ("entity", "technique"),
+        }
+    ),
+    "attributed-to": frozenset({("case_study", "entity")}),
+    "implements": frozenset({("software", "technique")}),
+    "reported-by": frozenset({("case_study", "entity")}),
 }
 
 MAX_DECODED_NODES = 1_000_000

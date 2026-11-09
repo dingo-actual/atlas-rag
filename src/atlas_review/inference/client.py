@@ -11,13 +11,14 @@ from __future__ import annotations
 
 import os
 import time
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
 from typing import Protocol
 
-from openai import Omit, OpenAI, OpenAIError, omit
+from openai import APIConnectionError, Omit, OpenAI, OpenAIError, omit
 from openai.types.chat import ChatCompletionMessageParam
 from openai.types.chat.chat_completion_chunk import ChatCompletionChunk
+from openai.types.shared_params.reasoning_effort import ReasoningEffort
 from openai.types.shared_params.response_format_json_object import (
     ResponseFormatJSONObject,
 )
@@ -35,6 +36,10 @@ MAX_REVIEW_RESPONSE_BYTES = MAX_REPORT_BYTES
 PLACEHOLDER_API_KEY = "not-required"
 MAX_TOKENS_PARAMETER = "max_tokens"
 JSON_RESPONSE_FORMAT = "json_object"
+RETRY_BASE_DELAY_SECONDS = 2.0
+RETRY_MAX_DELAY_SECONDS = 16.0
+TRANSIENT_STATUS_CODES = frozenset({429})
+SERVER_ERROR_STATUS_FLOOR = 500
 
 
 class MissingProviderCredentialError(ValueError):
@@ -106,7 +111,35 @@ def resolve_api_key(config: LLMConfig, environ: Mapping[str, str] | None = None)
     return value
 
 
-def build_contextualizer(config: LLMConfig) -> ChatContextualizer:
+def is_transient_provider_error(error: OpenAIError) -> bool:
+    """Return whether an identical request may succeed after this failure.
+
+    Args:
+        error (OpenAIError): Error raised by the configured SDK client.
+
+    Returns:
+        (bool) True for connection failures, rate limits, and server errors;
+            False for request, authentication, and unsupported-model errors.
+    """
+    if isinstance(error, APIConnectionError):
+        return True
+    status = getattr(error, "status_code", None)
+    return isinstance(status, int) and (
+        status in TRANSIENT_STATUS_CODES or status >= SERVER_ERROR_STATUS_FLOOR
+    )
+
+
+def _ignore_notice(message: str) -> None:
+    """Discard a retry notice when no reporter is configured."""
+    del message
+
+
+def build_contextualizer(
+    config: LLMConfig,
+    *,
+    automatic_retries: int = 0,
+    notify: Callable[[str], None] | None = None,
+) -> ChatContextualizer:
     """Build the contextualizer, resolving the credential before any request.
 
     Contextualization never asks for a provider response format: its output is
@@ -114,6 +147,8 @@ def build_contextualizer(config: LLMConfig) -> ChatContextualizer:
 
     Args:
         config (LLMConfig): Provider settings.
+        automatic_retries (int): Bounded retries for transient failures.
+        notify (Callable[[str], None] | None): Reporter for retry notices.
 
     Returns:
         (ChatContextualizer) Adapter bound to the configured endpoint.
@@ -125,6 +160,8 @@ def build_contextualizer(config: LLMConfig) -> ChatContextualizer:
         config,
         max_response_bytes=MAX_CONTEXT_RESPONSE_BYTES,
         request_json_mode=False,
+        automatic_retries=automatic_retries,
+        notify=notify,
     )
 
 
@@ -147,11 +184,18 @@ def build_reviewer(config: LLMConfig) -> ChatContextualizer:
         config,
         max_response_bytes=MAX_REVIEW_RESPONSE_BYTES,
         request_json_mode=True,
+        automatic_retries=config.automatic_retries,
+        notify=None,
     )
 
 
 def _chat_adapter(
-    config: LLMConfig, *, max_response_bytes: int, request_json_mode: bool
+    config: LLMConfig,
+    *,
+    max_response_bytes: int,
+    request_json_mode: bool,
+    automatic_retries: int,
+    notify: Callable[[str], None] | None,
 ) -> ChatContextualizer:
     """Resolve the credential and build one configured adapter."""
     try:
@@ -176,6 +220,8 @@ def _chat_adapter(
         ),
         max_response_bytes=max_response_bytes,
         request_json_mode=request_json_mode,
+        automatic_retries=automatic_retries,
+        notify=_ignore_notice if notify is None else notify,
     )
 
 
@@ -189,12 +235,18 @@ class ChatContextualizer:
         max_response_bytes (int): Bound on the assembled response text.
         request_json_mode (bool): Whether the configured JSON response format
             is sent with the request (review synthesis only).
+        automatic_retries (int): Bounded retries for transient failures.
+        notify (Callable[[str], None]): Reporter for each retry notice.
+        sleep (Callable[[float], None]): Backoff wait between attempts.
     """
 
     config: LLMConfig
     client: OpenAI
     max_response_bytes: int = MAX_CONTEXT_RESPONSE_BYTES
     request_json_mode: bool = False
+    automatic_retries: int = 0
+    notify: Callable[[str], None] = _ignore_notice
+    sleep: Callable[[float], None] = time.sleep
 
     def __call__(
         self,
@@ -217,23 +269,39 @@ class ChatContextualizer:
             (ProviderReply) Nonempty, untruncated response text and metadata.
 
         Raises:
-            AtlasReviewError: The provider failed or returned unusable output.
+            AtlasReviewError: The provider failed, returned unusable output, or
+                kept failing transiently after the configured retries.
         """
         messages: list[ChatCompletionMessageParam] = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_payload},
         ]
-        started = time.monotonic()
-        try:
-            stream = self._create(messages, output_tokens, temperature)
-            reply = collect_stream(
-                stream,
-                duration=time.monotonic() - started,
-                max_bytes=self.max_response_bytes,
-            )
-        except OpenAIError as exc:
-            raise _provider_error(exc) from exc
-        return reply
+        attempt = 0
+        while True:
+            attempt += 1
+            started = time.monotonic()
+            try:
+                stream = self._create(messages, output_tokens, temperature)
+                return collect_stream(
+                    stream,
+                    duration=time.monotonic() - started,
+                    max_bytes=self.max_response_bytes,
+                )
+            except OpenAIError as exc:
+                if attempt > self.automatic_retries or not is_transient_provider_error(
+                    exc
+                ):
+                    raise _provider_error(exc) from exc
+                self._pause(attempt, exc)
+
+    def _pause(self, attempt: int, error: OpenAIError) -> None:
+        """Report one transient failure and wait before the next attempt."""
+        delay = min(RETRY_MAX_DELAY_SECONDS, RETRY_BASE_DELAY_SECONDS * attempt)
+        self.notify(
+            f"provider {type(error).__name__} from {self.config.model}; "
+            f"retry {attempt}/{self.automatic_retries} in {delay:.0f}s"
+        )
+        self.sleep(delay)
 
     def _create(
         self,
@@ -243,6 +311,7 @@ class ChatContextualizer:
     ) -> Iterator[ChatCompletionChunk]:
         """Open the streamed completion with the configured token parameter."""
         response_format: ResponseFormatJSONObject | Omit = self._response_format()
+        reasoning_effort = self._reasoning_effort()
         if self.config.output_token_parameter == MAX_TOKENS_PARAMETER:
             return self.client.chat.completions.create(
                 model=self.config.model,
@@ -252,6 +321,7 @@ class ChatContextualizer:
                 response_format=response_format,
                 max_tokens=output_tokens,
                 temperature=self._sampling(temperature),
+                reasoning_effort=reasoning_effort,
             )
         return self.client.chat.completions.create(
             model=self.config.model,
@@ -261,6 +331,7 @@ class ChatContextualizer:
             response_format=response_format,
             max_completion_tokens=output_tokens,
             temperature=self._sampling(temperature),
+            reasoning_effort=reasoning_effort,
         )
 
     def _response_format(self) -> ResponseFormatJSONObject | Omit:
@@ -276,6 +347,12 @@ class ChatContextualizer:
     def _sampling(temperature: float | None) -> float | Omit:
         """Omit a null temperature because some compatible models reject it."""
         return omit if temperature is None else temperature
+
+    def _reasoning_effort(self) -> ReasoningEffort | Omit:
+        """Send a configured reasoning effort, or omit the provider default."""
+        if self.config.reasoning_effort is None:
+            return omit
+        return self.config.reasoning_effort
 
     def close(self) -> None:
         """Close the underlying HTTP client."""

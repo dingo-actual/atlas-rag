@@ -18,6 +18,7 @@ from atlas_review.contracts import (
     ReviewRequest,
 )
 from atlas_review.corpus.atlas_v6 import ParsedCorpus
+from atlas_review.corpus.download import download_latest_source, download_source
 from atlas_review.corpus.ingest import (
     BuildServices,
     IngestionPlan,
@@ -235,7 +236,36 @@ class WorkspaceSession:
             (PreparedIngestion) Corpus, preview, and LLM-free build plan.
         """
         raw = read_source_file(path, max_bytes=self.config.corpus.max_source_bytes)
-        corpus, preview = preview_source(raw, origin=str(path))
+        return self._prepare(raw, origin=str(path))
+
+    def prepare_default_source(self) -> PreparedIngestion:
+        """Download the configured default source and plan its build.
+
+        Returns:
+            (PreparedIngestion) Corpus, preview, and LLM-free build plan.
+        """
+        downloaded = download_source(
+            self.config.corpus.default_url,
+            timeout_seconds=self.config.corpus.download_timeout_seconds,
+            max_bytes=self.config.corpus.max_source_bytes,
+        )
+        return self._prepare(downloaded.raw, origin=downloaded.origin)
+
+    def prepare_latest_source(self) -> PreparedIngestion:
+        """Download the newest ATLAS v6 release and plan its build.
+
+        Returns:
+            (PreparedIngestion) Corpus, preview, and LLM-free build plan.
+        """
+        downloaded = download_latest_source(
+            timeout_seconds=self.config.corpus.download_timeout_seconds,
+            max_bytes=self.config.corpus.max_source_bytes,
+        )
+        return self._prepare(downloaded.raw, origin=downloaded.origin)
+
+    def _prepare(self, raw: bytes, *, origin: str) -> PreparedIngestion:
+        """Parse source bytes and plan an explicit build."""
+        corpus, preview = preview_source(raw, origin=origin)
         plan = plan_ingestion(
             corpus,
             config=self.config,
@@ -261,7 +291,11 @@ class WorkspaceSession:
         """
         contextualizer = None
         if not prepared.plan.reuse_generation and prepared.plan.uncached_context_count:
-            contextualizer = build_contextualizer(self.config.llm)
+            contextualizer = build_contextualizer(
+                self.config.llm,
+                automatic_retries=self.config.contextualization.automatic_retries,
+                notify=progress,
+            )
         return run_ingestion(
             prepared.corpus,
             source_bytes=prepared.source_bytes,

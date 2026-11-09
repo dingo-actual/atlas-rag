@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 import numpy as np
+from openai import OpenAIError
 from openai.types.chat import ChatCompletionChunk
 from openai.types.chat.chat_completion_chunk import Choice, ChoiceDelta
 from openai.types.completion_usage import CompletionUsage
@@ -213,14 +214,25 @@ def stream_chunks(
 
 @dataclass(slots=True)
 class FakeCompletions:
-    """Return a prepared stream and record every request keyword argument."""
+    """Return a prepared stream and record every request keyword argument.
+
+    Instance Attributes:
+        chunks (tuple[ChatCompletionChunk, ...]): Stream returned per request.
+        errors (tuple[OpenAIError | None, ...]): Failure per request position.
+        calls (list[dict[str, object]]): Recorded request arguments.
+    """
 
     chunks: tuple[ChatCompletionChunk, ...]
+    errors: tuple[OpenAIError | None, ...] = ()
     calls: list[dict[str, object]] = field(default_factory=list)
 
     def create(self, **kwargs: object) -> Iterator[ChatCompletionChunk]:
-        """Return the prepared stream for this request."""
+        """Raise the prepared error for this position, else return the stream."""
         self.calls.append(dict(kwargs))
+        position = len(self.calls) - 1
+        error = self.errors[position] if position < len(self.errors) else None
+        if error is not None:
+            raise error
         return iter(self.chunks)
 
 

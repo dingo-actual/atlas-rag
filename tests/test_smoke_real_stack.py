@@ -18,9 +18,11 @@ import numpy as np
 import pytest
 
 from atlas_review.config import EMBEDDING_DIMENSION, AppConfig
+from atlas_review.contracts import ReviewRequest
 from atlas_review.corpus.atlas_v6 import ParsedCorpus
 from atlas_review.corpus.ingest import BuildServices, run_ingestion
 from atlas_review.retrieval.embeddings import FastEmbedBackend, query_vector
+from atlas_review.retrieval.hybrid import check_focus
 from atlas_review.retrieval.loader import load_generation
 from atlas_review.retrieval.pipeline import retrieve
 from atlas_review.retrieval.rerank import FastEmbedReranker
@@ -135,6 +137,13 @@ def test_real_stack_builds_and_searches(
         assert all(
             len(candidate.graph_paths) <= 2 for candidate in single.trace.candidates
         )
+
+        examples = Path(__file__).resolve().parents[1] / "examples"
+        for path in sorted(examples.glob("*.json")):
+            brief = ReviewRequest.model_validate_json(
+                path.read_text(encoding="utf-8"), strict=True
+            )
+            check_focus(brief.retrieval_focus, counters, session.config)
     finally:
         session.close()
 

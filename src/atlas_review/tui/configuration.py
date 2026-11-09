@@ -92,7 +92,9 @@ def _edit(console: Console, session: WorkspaceSession) -> None:
         "max_input_characters": config.max_input_characters,
         "max_findings": config.max_findings,
         "temperature": config.temperature,
+        "reasoning_effort": config.reasoning_effort,
         "timeout_seconds": config.timeout_seconds,
+        "automatic_retries": config.automatic_retries,
     }
     for field, label in _TEXT_FIELDS:
         raw[field] = Prompt.ask(

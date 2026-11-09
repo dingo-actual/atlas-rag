@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "title": "Financial operations copilot review",
+  "review_question": "Could manipulated source content mislead a payment-change decision, and what should staff independently verify?",
+  "retrieval_focus": "Vendor email and payment instruction manipulation misleading staff who prepare payment changes, with cited answers that look authoritative",
+  "system_description": "A copilot retrieves vendor emails and internal payment instructions to help staff prepare a payment change. It recommends account details in a cited answer; it cannot move funds.",
+  "users_and_roles": ["Finance staff who prepare payment changes", "Approvers who authorize payments", "Vendors who send email"],
+  "data_sources": ["Vendor email threads", "Internal payment instruction documents", "Vendor master records"],
+  "untrusted_inputs": ["Email from external vendors", "Attachments that restate account details"],
+  "tools_and_permissions": ["Search vendor email and payment instructions", "Return a cited recommendation to the requesting staff member"],
+  "sensitive_assets": ["Bank account details", "Payment amounts and schedules", "Vendor identity data"],
+  "existing_controls": ["A second staff member approves each payment change outside the copilot"],
+  "constraints": ["The copilot has no payment execution permission", "Staff may rely heavily on the cited answer"],
+  "unknowns": ["Whether account changes are re-verified against the vendor master record", "Whether displayed citations are checked by staff"]
+}

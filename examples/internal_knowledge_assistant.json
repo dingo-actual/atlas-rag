@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "title": "Internal knowledge assistant design review",
+  "review_question": "How could untrusted retrieved content influence sensitive answers, and what should we verify before rollout?",
+  "retrieval_focus": "Indirect prompt injection through retrieved workspace messages influencing sensitive answers and output links",
+  "system_description": "An employee assistant retrieves internal documents and workspace messages, then returns a cited answer. Retrieval runs under an application service identity.",
+  "users_and_roles": ["Employees", "External collaborators who can write in selected channels"],
+  "data_sources": ["Internal document repository", "Workspace messages"],
+  "untrusted_inputs": ["Messages written by external collaborators"],
+  "tools_and_permissions": ["Search documents", "Read retrieved messages", "Return an answer to the requesting employee"],
+  "sensitive_assets": ["Internal documents accessible to the service identity"],
+  "existing_controls": ["Employees authenticate before using the assistant"],
+  "constraints": ["The initial application has no action tools beyond retrieval"],
+  "unknowns": ["Whether document authorization is checked for the requesting employee", "Whether returned links are validated outside the model"]
+}

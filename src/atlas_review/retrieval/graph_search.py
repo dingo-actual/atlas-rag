@@ -34,7 +34,7 @@ _CATEGORY_RANK = {
     "mitigation": 2,
     "relationship": 3,
 }
-_ATLAS_ID = re.compile(r"\bAML\.(?:TA|CS|T|M)\d{4}(?:\.\d{3})?\b", re.IGNORECASE)
+_ATLAS_ID = re.compile(r"\bAML\.(?:TA|CS|T|M|S|E)\d{4}(?:\.\d{3})?\b", re.IGNORECASE)
 
 # Allowed step names per current node kind, in the round-robin order.
 _ALLOWED_STEPS: dict[str, tuple[str, ...]] = {

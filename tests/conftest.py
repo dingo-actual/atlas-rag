@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -29,6 +30,43 @@ ACQUIRED_AT = "2026-11-01T00:00:00+00:00"
 REVIEW_ID = "review-fixture"
 
 FIXTURE_SOURCE = Path(__file__).resolve().parents[1] / "fixtures" / "mini_atlas_v6.yaml"
+
+
+def pytest_addoption(parser: pytest.Parser) -> None:
+    """Register the opt-in live-provider switch."""
+    parser.addoption(
+        "--llm",
+        action="store_true",
+        default=False,
+        help=(
+            "run the live provider tests in tests/test_live_llm.py; the configured "
+            "credential variable must be present in the environment"
+        ),
+    )
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    """Register the marker that opts one test into live provider calls."""
+    config.addinivalue_line(
+        "markers", "llm: makes live provider requests (opt-in with --llm)"
+    )
+
+
+def pytest_collection_modifyitems(
+    config: pytest.Config, items: list[pytest.Item]
+) -> None:
+    """Keep live provider tests out of the default offline suite."""
+    live = config.getoption("llm")
+    for item in items:
+        if "llm" not in item.keywords:
+            continue
+        if live:
+            item.add_marker(pytest.mark.enable_socket)
+        else:
+            item.add_marker(
+                pytest.mark.skip(reason="live provider test; pass --llm to run it")
+            )
+
 
 RETRIEVAL_FOCUS = (
     "indirect prompt injection through retrieved workspace messages "
@@ -73,7 +111,12 @@ def source_bytes(source_path: Path) -> bytes:
 @pytest.fixture
 def workspace_root(tmp_path: Path) -> Path:
     """Return an empty workspace directory inside the test's temp directory."""
-    return tmp_path / "workspace"
+    root = tmp_path / "workspace"
+    cache = os.environ.get("ATLAS_REVIEW_MODEL_CACHE")
+    if cache:
+        root.mkdir(parents=True, exist_ok=True)
+        (root / "models").symlink_to(Path(cache).resolve(), target_is_directory=True)
+    return root
 
 
 @pytest.fixture

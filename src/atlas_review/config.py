@@ -22,9 +22,10 @@ EMBEDDING_MODEL = "BAAI/bge-base-en-v1.5"
 RERANKER_MODEL = "Xenova/ms-marco-MiniLM-L-12-v2"
 EMBEDDING_DIMENSION = 768
 BGE_QUERY_PREFIX = "Represent this sentence for searching relevant passages: "
-ATLAS_TOKEN_PATTERN = r"(?u)\baml\.(?:ta|cs|t|m)\d{4}(?:\.\d{3})?\b|\b\w+\b"
+ATLAS_TOKEN_PATTERN = r"(?u)\baml\.(?:ta|cs|t|m|s|e)\d{4}(?:\.\d{3})?\b|\b\w+\b"
 MAX_SOURCE_BYTES = 20 * 1024 * 1024
 MAX_REQUEST_CHARACTERS = 40000
+MAX_AUTOMATIC_RETRIES = 5
 SUPPORTED_FORMAT_MAJOR = 6
 PLACEHOLDER_BASE_URL = "https://your-provider.example/v1"
 PLACEHOLDER_MODEL = "your-model-id"
@@ -115,7 +116,7 @@ class ContextualizationConfig(AppModel):
 
     enabled: bool = True
     document_builder_version: RequiredText = "atlas-owner-v1"
-    prompt_version: RequiredText = "chunk-context-v1"
+    prompt_version: RequiredText = "chunk-context-v2"
     context_max_tokens: int = Field(default=96, gt=0)
     output_tokens: int = Field(default=256, gt=0)
     temperature: float | None = Field(default=None, ge=0, le=2)
@@ -123,7 +124,7 @@ class ContextualizationConfig(AppModel):
         default=MAX_REQUEST_CHARACTERS, gt=0, le=MAX_REQUEST_CHARACTERS
     )
     concurrency: int = 1
-    automatic_retries: int = 0
+    automatic_retries: int = Field(default=5, ge=0, le=MAX_AUTOMATIC_RETRIES)
     cache_policy: Literal["reuse_valid"] = "reuse_valid"
     regeneration_revision: int = Field(default=0, ge=0)
 
@@ -139,13 +140,6 @@ class ContextualizationConfig(AppModel):
     def require_sequential_requests(cls, value: int) -> int:
         if value != 1:
             raise ValueError("contextualization is sequential; concurrency must be 1")
-        return value
-
-    @field_validator("automatic_retries")
-    @classmethod
-    def require_no_retries(cls, value: int) -> int:
-        if value != 0:
-            raise ValueError("automatic retries must be 0; retries are explicit")
         return value
 
 
@@ -267,11 +261,13 @@ class LLMConfig(AppModel):
     api_key_mode: Literal["environment", "none"] = "environment"
     api_key_env: str | None = "ATLAS_REVIEW_API_KEY"
     timeout_seconds: float = Field(default=90.0, gt=0)
+    automatic_retries: int = Field(default=5, ge=0, le=MAX_AUTOMATIC_RETRIES)
     output_token_parameter: Literal["max_tokens", "max_completion_tokens"] = (
         "max_tokens"
     )
     output_tokens: int = Field(default=2500, gt=0)
     temperature: float | None = Field(default=None, ge=0, le=2)
+    reasoning_effort: Literal["none", "low", "medium", "high"] | None = "medium"
     response_format_mode: Literal["text", "json_object"] = "text"
     max_input_characters: int = Field(
         default=MAX_REQUEST_CHARACTERS, gt=0, le=MAX_REQUEST_CHARACTERS

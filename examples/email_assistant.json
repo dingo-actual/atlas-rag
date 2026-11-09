@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "title": "Email assistant review",
+  "review_question": "What could happen if a malicious message influences subsequent drafts, and which facts determine whether that influence can propagate?",
+  "retrieval_focus": "Retrieved email examples steering drafted replies, malicious attachments and instruction-like content in incoming mail",
+  "system_description": "An assistant retrieves earlier messages as examples, then drafts a reply to the incoming email. Users review the draft before it is used.",
+  "users_and_roles": ["Mailbox owner", "People who can send email to the mailbox owner"],
+  "data_sources": ["Earlier messages in the mailbox", "The incoming email", "Shared mailbox folders"],
+  "untrusted_inputs": ["Incoming email from outside the organization", "Attachments and quoted threads"],
+  "tools_and_permissions": ["Search earlier messages", "Draft a reply in the mailbox"],
+  "sensitive_assets": ["Mailbox contents", "Contact names and addresses"],
+  "existing_controls": ["The user reads the draft before sending"],
+  "constraints": ["The boundary between drafting and sending is a deployment choice", "No calendar or file access in the reviewed configuration"],
+  "unknowns": ["Whether any deployment sends drafts automatically", "Whether retrieved examples are filtered by sender trust"]
+}

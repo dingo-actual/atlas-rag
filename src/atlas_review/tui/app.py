@@ -102,11 +102,27 @@ def _status(session: WorkspaceSession) -> object:
 
 
 def _ingest(console: Console, session: WorkspaceSession) -> None:
-    """Ask for a source path and run explicit contextualized ingestion."""
-    raw = Prompt.ask("ATLAS v6 YAML path", default="", console=console).strip()
-    if not raw:
-        return
-    prepared = session.prepare_ingestion(Path(raw).expanduser())
+    """Ask for a source, then run explicit contextualized ingestion."""
+    console.print(
+        "default: pinned documented source | latest: newest ATLAS 6.x release | "
+        "file: local YAML",
+        style="dim",
+    )
+    source = Prompt.ask(
+        "Source",
+        choices=["default", "latest", "file"],
+        default="default",
+        console=console,
+    )
+    if source == "default":
+        prepared = session.prepare_default_source()
+    elif source == "latest":
+        prepared = session.prepare_latest_source()
+    else:
+        raw = Prompt.ask("ATLAS v6 YAML path", default="", console=console).strip()
+        if not raw:
+            return
+        prepared = session.prepare_ingestion(Path(raw).expanduser())
     console.print(render_preview(prepared.preview))
     console.print(render_ingest_plan(prepared.plan))
     answer = Prompt.ask(

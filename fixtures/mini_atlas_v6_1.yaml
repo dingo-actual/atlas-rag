@@ -1,0 +1,282 @@
+# Attribution: excerpt adapted from the MITRE ATLAS data repository
+# (https://github.com/mitre-atlas/atlas-data), Apache License 2.0.
+# Identifiers, names, and wording are illustrative and reduced for tests.
+format-version: 6.1.0
+collection:
+  id: ATLAS-collection
+  object-type: collection
+  name: ATLAS
+  description: Adversarial Threat Landscape for Artificial-Intelligence Systems.
+  references: []
+  created-date: '2020-10-23'
+  modified-date: '2026-10-28'
+  version: '2026.10'
+  uuid: 7a735cfc-0469-5d8b-b11f-d014be33394e
+matrix:
+  id: ATLAS-matrix
+  object-type: matrix
+  name: ATLAS
+  description: Matrix view of the ATLAS tactics and techniques in this fixture.
+  references: []
+  created-date: '2020-10-23'
+  modified-date: '2026-08-31'
+  uuid: 967c63ff-22bd-5ff8-aa59-1e1fca8dec78
+tactics:
+  AML.TA0004:
+    id: AML.TA0004
+    object-type: tactic
+    name: Initial Access
+    description: The adversary is trying to get into your system.
+    references: []
+    created-date: '2023-10-25'
+    modified-date: '2024-01-01'
+    attack-reference:
+      id: TA0001
+      url: https://attack.mitre.org/tactics/TA0001/
+  AML.TA0005:
+    id: AML.TA0005
+    object-type: tactic
+    name: Execution
+    description: The adversary is trying to run malicious code.
+    references: []
+    created-date: '2023-10-25'
+    modified-date: '2024-01-01'
+techniques:
+  AML.T0051:
+    id: AML.T0051
+    object-type: technique
+    name: LLM Prompt Injection
+    description: >-
+      Adversaries may inject instructions &amp; markup such as
+      <code>IGNORE PREVIOUS</code> into text consumed by a language model.
+    references:
+      - id: owasp-llm
+        title: OWASP Top 10 for LLM Applications
+        url: https://owasp.org/www-project-top-10-for-large-language-model-applications
+    created-date: '2023-10-25'
+    modified-date: '2024-06-01'
+    platforms:
+      - Generative AI
+    maturity: Demonstrated
+    uuid: 1b0a5a55-1111-4d1d-8a11-0a0a0a0a0a01
+  AML.T0051.001:
+    id: AML.T0051.001
+    object-type: technique
+    name: Indirect
+    description: >-
+      An adversary may place instructions in data the model later retrieves,
+      for example a payload like <system>reset</system> in a public document.
+    references: []
+    created-date: '2023-10-25'
+    modified-date: '2024-06-01'
+    platforms:
+      - Generative AI
+      - Agentic AI
+    maturity: Demonstrated
+    uuid: 1b0a5a55-1111-4d1d-8a11-0a0a0a0a0a02
+  AML.T0012:
+    id: AML.T0012
+    object-type: technique
+    name: Valid Accounts
+    description: >-
+      Adversaries may obtain and abuse credentials of existing accounts.
+      See [[missing-ref]] for related reporting.
+    references:
+      - id: ref-present
+        title: Existing reference
+        url: https://example.com/report
+    created-date: '2023-10-25'
+    modified-date: '2024-02-01'
+    platforms:
+      - Enterprise
+    maturity: Feasible
+    x-note: additive field retained for compatibility
+    uuid: 1b0a5a55-1111-4d1d-8a11-0a0a0a0a0a03
+mitigations:
+  AML.M0033:
+    id: AML.M0033
+    object-type: mitigation
+    name: Input Validation
+    description: Validate untrusted text before it reaches a model.
+    references:
+      - id: bad-link
+        title: Link with an unsupported scheme
+        url: javascript:alert(1)
+    created-date: '2024-02-02'
+    modified-date: '2024-02-03'
+    lifecycle-phases:
+      - Mitigation
+    categories:
+      - Technical
+      - AI
+    uuid: 2c1b6b66-2222-4e2e-9b22-0b0b0b0b0b01
+case-studies:
+  AML.CS0035:
+    id: AML.CS0035
+    object-type: case-study
+    name: Data Exfiltration from Slack AI
+    description: >-
+      Researchers demonstrated exfiltration through indirect prompt injection
+      [[ref-present]] in a workspace message.
+    references:
+      - id: ref-present
+        title: Existing reference
+        url: https://example.com/report
+    created-date: '2025-11-07'
+    modified-date: '2025-11-07'
+    type: Exercise
+    actor: PromptArmor
+    target: Slack AI
+    date: '2024-08-20'
+    date-granularity: Day
+    uuid: 3d2c7c77-3333-4f3f-ac33-0c0c0c0c0c01
+  AML.CS0024:
+    id: AML.CS0024
+    object-type: case-study
+    name: Exploitation of a Chatbot
+    description: An incident case used only to check case-type handling.
+    references: []
+    created-date: '2024-05-05'
+    modified-date: '2024-05-05'
+    type: Incident
+    actor: Unknown
+    target: Chatbot
+    date: '2023-11'
+    date-granularity: Month
+    uuid: 3d2c7c77-3333-4f3f-ac33-0c0c0c0c0c02
+entities:
+  AML.E0001:
+    id: AML.E0001
+    object-type: entity
+    name: Example Research Group
+    description: A research group that reports on prompt injection.
+    references: []
+    created-date: '2026-10-28'
+    modified-date: '2026-10-28'
+    entity-type: Team
+    associated-entities:
+      - name: PromptArmor
+        id: AML.E0002
+    uuid: 4e3d8d88-4444-4a4a-8d44-0d0d0d0d0d01
+  AML.E0002:
+    id: AML.E0002
+    object-type: entity
+    name: PromptArmor
+    description: A company that publishes prompt-injection research.
+    references: []
+    created-date: '2026-10-28'
+    modified-date: '2026-10-28'
+    entity-type: Organization
+    associated-entities: []
+    uuid: 4e3d8d88-4444-4a4a-8d44-0d0d0d0d0d02
+software:
+  AML.S0001:
+    id: AML.S0001
+    object-type: software
+    name: metame
+    description: A metamorphic code engine that mutates executables.
+    references: []
+    created-date: '2026-10-28'
+    modified-date: '2026-10-28'
+    software-type: Tool
+    software-categories:
+      - program
+    aliases:
+      - metame-cli
+    uuid: 5f4e9e99-5555-4b4b-9e55-0e0e0e0e0e01
+  AML.S0002:
+    id: AML.S0002
+    object-type: software
+    name: Example Uploader
+    description: A command-line uploader used to publish model artifacts.
+    references: []
+    created-date: '2026-10-28'
+    modified-date: '2026-10-28'
+    software-type: Tool
+    software-categories:
+      - program
+    aliases: []
+    uuid: 5f4e9e99-5555-4b4b-9e55-0e0e0e0e02
+relationships:
+  AML.CS0035:
+    employs:
+      - source: AML.CS0035
+        target: AML.T0051.001
+        relationship-type: employs
+        description: The adversary planted instructions in a public channel.
+        tactic: AML.TA0005
+        step-id: S01
+        leads-to:
+          - S02
+      - source: AML.CS0035
+        target: AML.T0012
+        relationship-type: employs
+        description: The researcher created a valid, non-admin account.
+        tactic: AML.TA0004
+        step-id: S02
+        leads-to:
+          - S03
+      - source: AML.CS0035
+        target: AML.T0051.001
+        relationship-type: employs
+        description: The victim queried the assistant and received injected output.
+        tactic: AML.TA0005
+        step-id: S03
+    uses:
+      - source: AML.CS0035
+        target: AML.S0001
+        relationship-type: uses
+        activity-purpose: Security Evaluation
+        description: The researcher used metame to mutate the executable.
+    attributed-to:
+      - source: AML.CS0035
+        target: AML.E0002
+        relationship-type: attributed-to
+        activity-purpose: Security Evaluation
+    reported-by:
+      - source: AML.CS0035
+        target: AML.E0001
+        relationship-type: reported-by
+  AML.M0033:
+    mitigates:
+      - source: AML.M0033
+        target: AML.T0051
+        relationship-type: mitigates
+        description: Validation prevents injected instructions from executing.
+  AML.E0001:
+    uses:
+      - source: AML.E0001
+        target: AML.S0002
+        relationship-type: uses
+        activity-purpose: Research
+  AML.E0002:
+    uses:
+      - source: AML.E0002
+        target: AML.T0051
+        relationship-type: uses
+        activity-purpose: Research
+  AML.S0001:
+    implements:
+      - source: AML.S0001
+        target: AML.T0051.001
+        relationship-type: implements
+        description: The tool mutates code used in the injection step.
+  AML.T0051.001:
+    specializes:
+      - source: AML.T0051.001
+        target: AML.T0051
+        relationship-type: specializes
+    achieves:
+      - source: AML.T0051.001
+        target: AML.TA0005
+        relationship-type: achieves
+  ATLAS-matrix:
+    sequences:
+      - source: ATLAS-matrix
+        target: AML.TA0004
+        relationship-type: sequences
+        position: 1
+      - source: ATLAS-matrix
+        target: AML.TA0005
+        relationship-type: sequences
+        position: 2

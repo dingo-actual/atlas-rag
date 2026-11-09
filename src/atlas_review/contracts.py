@@ -45,9 +45,26 @@ BriefItems = Annotated[list[ShortText], Field(max_length=20)]
 Sha256Hex = Annotated[str, Field(pattern=_SHA256_PATTERN)]
 OwnerKind = Literal["technique", "mitigation", "case_study"]
 EntityKind = Literal[
-    "collection", "matrix", "tactic", "technique", "mitigation", "case_study"
+    "collection",
+    "matrix",
+    "tactic",
+    "technique",
+    "mitigation",
+    "case_study",
+    "software",
+    "entity",
 ]
-RelationName = Literal["employs", "mitigates", "specializes", "achieves", "sequences"]
+RelationName = Literal[
+    "employs",
+    "mitigates",
+    "specializes",
+    "achieves",
+    "sequences",
+    "uses",
+    "attributed-to",
+    "implements",
+    "reported-by",
+]
 SearchChannel = Literal["dense", "bm25", "graph", "exact_id"]
 EvidenceChannel = Literal["dense", "bm25", "graph", "exact_id", "graph_connector"]
 PassageId = Annotated[int, Field(gt=0, lt=2**63)]
@@ -177,6 +194,13 @@ class SourceSnapshot(AppModel):
         return value
 
 
+class AssociatedEntity(AppModel):
+    """One entity linked from a source entity record."""
+
+    entity_id: RequiredText
+    name: RequiredText
+
+
 class AtlasEntity(AppModel):
     """One normalized ATLAS record of any supported kind."""
 
@@ -201,8 +225,17 @@ class AtlasEntity(AppModel):
     case_target: str | None = None
     case_date: str | None = None
     case_date_granularity: str | None = None
+    case_start_date: str | None = None
+    case_start_date_granularity: str | None = None
+    case_end_date: str | None = None
+    case_end_date_granularity: str | None = None
     attack_reference: str | None = None
     reporter: str | None = None
+    software_type: str | None = None
+    software_categories: list[str] = Field(default_factory=list)
+    aliases: list[str] = Field(default_factory=list)
+    entity_type: str | None = None
+    associated_entities: list[AssociatedEntity] = Field(default_factory=list)
 
     @field_validator("source_locator")
     @classmethod
@@ -219,8 +252,14 @@ class AtlasEntity(AppModel):
         "case_target",
         "case_date",
         "case_date_granularity",
+        "case_start_date",
+        "case_start_date_granularity",
+        "case_end_date",
+        "case_end_date_granularity",
         "attack_reference",
         "reporter",
+        "software_type",
+        "entity_type",
     )
     @classmethod
     def require_nonblank_optional_text(cls, value: str | None) -> str | None:
@@ -239,6 +278,7 @@ class AtlasRelationship(AppModel):
     step_id: str | None = None
     tactic_id: str | None = None
     position: int | None = Field(default=None, ge=0)
+    activity_purpose: str | None = None
     leads_to: list[RequiredText] = Field(default_factory=list)
     source_locator: RequiredText
     source_fields: dict[str, JsonValue] = Field(default_factory=dict)
@@ -248,7 +288,7 @@ class AtlasRelationship(AppModel):
     def require_locator(cls, value: str) -> str:
         return _require_absolute_locator(value)
 
-    @field_validator("description", "step_id", "tactic_id")
+    @field_validator("description", "step_id", "tactic_id", "activity_purpose")
     @classmethod
     def require_nonblank_optional_text(cls, value: str | None) -> str | None:
         return _require_nonblank_optional(value)
@@ -653,6 +693,7 @@ class ReviewAttempt(AppModel):
     output_token_parameter: Literal["max_tokens", "max_completion_tokens"]
     output_tokens: int = Field(gt=0)
     temperature: float | None = None
+    reasoning_effort: Literal["none", "low", "medium", "high"] | None = None
     response_format_mode: Literal["text", "json_object"]
     max_findings: int = Field(gt=0)
     request_characters: int = Field(ge=0)
