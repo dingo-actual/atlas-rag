@@ -58,7 +58,7 @@ You get a menu:
 0  Exit
 ```
 
-### Configure the provider (menu 3)
+### Configure the provider
 
 Enter the provider name, the HTTP(S) API base URL, the model name, and the
 name of the environment variable that holds the API key (default
@@ -74,7 +74,7 @@ Provider settings are saved in the workspace. Requests are retried
 automatically for temporary transport failures (rate limits, server errors,
 timeouts). Validation failures are reported, not retried.
 
-### Ingest ATLAS data (menu 1)
+### Ingest ATLAS data
 
 Choose one of three sources:
 
@@ -89,7 +89,7 @@ passages) and asks before building. Building is a separate, explicit step.
 Only text without a cached response needs provider requests, so re-ingesting a
 known release is cheap, and the preview shows the request count first.
 
-### Run a review (menu 2)
+### Run a review
 
 Load a brief from JSON (`load`) or fill one in field by field (`new`). A brief
 asks for:
@@ -113,7 +113,7 @@ the report. Example briefs are in [`examples/`](examples/):
 `examples/reports/` holds one real, unedited exported review along with the
 provider settings that produced it.
 
-### Read and export (menu 4)
+### Read and export
 
 Reopen any saved review by ID or unique ID prefix. From there you can export
 it to Markdown or regenerate it from the same stored evidence. Exports are
@@ -155,7 +155,7 @@ text. `./.atlas-review/` is ignored by Git in this repository.
 
 ## Troubleshooting
 
-- **Status shows `not configured`** — set the provider URL and model in menu 3.
+- **Status shows `not configured`** — set the provider URL and model.
 - **`missing_provider_credential`** — export the environment variable named in
   the provider settings. The tool never reads `OPENAI_API_KEY` on its own.
 - **Ingestion refuses a file** — only ATLAS v6 YAML is accepted. The error names
