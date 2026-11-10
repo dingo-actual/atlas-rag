@@ -171,9 +171,3 @@ This project is licensed under the Apache License, Version 2.0. The full text
 is in [`LICENSE`](LICENSE). ATLAS material stays under its upstream Apache
 License 2.0 terms, and the retrieval models keep their own licenses. See
 [`NOTICE`](NOTICE) for sources, versions, and notices.
-
-## Development
-
-Setup, quality gates, and contribution rules are in [`AGENTS.md`](AGENTS.md).
-The authoritative product specification is
-`resources/atlas_security_review_rag_specification.md`.
