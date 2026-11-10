@@ -27,6 +27,7 @@ from atlas_review.contracts import (
 )
 from atlas_review.corpus.atlas_v6 import PIPELINE_VERSION, ParsedCorpus
 from atlas_review.corpus.chunk import LAYOUT_VERSION
+from atlas_review.corpus.contextualize import contextualization_settings
 from atlas_review.hashing import fingerprint, sha256_hex
 from atlas_review.retrieval.tokenizers import TokenCounters
 from atlas_review.storage.repository import StoredArtifact
@@ -51,7 +52,6 @@ def settings_fingerprint(
     The fingerprint covers the compatibility-critical inputs the specification
     requires, including the FastEmbed and bm25s package identities.
     """
-    context = config.contextualization
     identity = cast(
         "JsonValue",
         {
@@ -66,17 +66,7 @@ def settings_fingerprint(
                 "overlap_tokens": config.chunking.overlap_tokens,
                 "header_max_tokens": config.chunking.header_max_tokens,
             },
-            "document_builder_version": context.document_builder_version,
-            "prompt_version": context.prompt_version,
-            "contextualization": {
-                "endpoint": config.llm.base_url,
-                "model": config.llm.model,
-                "output_token_parameter": config.llm.output_token_parameter,
-                "output_tokens": context.output_tokens,
-                "context_max_tokens": context.context_max_tokens,
-                "temperature": context.temperature,
-                "regeneration_revision": context.regeneration_revision,
-            },
+            "contextualization": contextualization_settings(config),
             "tokenizers": [counters.embedding.name, counters.reranker.name],
             "embedding": {
                 "model_name": config.embedding.model_name,
@@ -257,6 +247,7 @@ def manifest(
             output_tokens=config.contextualization.output_tokens,
             context_max_tokens=config.contextualization.context_max_tokens,
             temperature=config.contextualization.temperature,
+            reasoning_effort=config.llm.reasoning_effort,
             regeneration_revision=config.contextualization.regeneration_revision,
             results_digest=fingerprint([_digest(text) for text in context_texts]),
         ),

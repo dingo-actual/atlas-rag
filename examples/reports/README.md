@@ -33,11 +33,10 @@ uv run atlas-review --workspace ./.atlas-review
 
 The bundled fixture is a small attributed excerpt, so the report can only use
 the techniques, cases, and mitigations present in that excerpt. Ingesting the
-full pinned ATLAS snapshot from
-[`docs/source_manifest.json`](../../docs/source_manifest.json) uses the same
-steps and produces a much larger passage set: the plan reported 321 owner
-documents and 1,521 chunks, which means 1,521 contextualization requests on a
-cold cache. The application shows that count before an explicit build.
+full pinned ATLAS snapshot uses the same steps and produces a much larger
+passage set: the plan reported 321 owner documents and 1,521 chunks, which
+means 1,521 contextualization requests on a cold cache. The application shows
+that count before an explicit build.
 
 ## What to look for
 

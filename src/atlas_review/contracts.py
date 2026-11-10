@@ -644,6 +644,7 @@ class ContextualizationIdentity(AppModel):
     output_tokens: int = Field(gt=0)
     context_max_tokens: int = Field(gt=0)
     temperature: float | None = None
+    reasoning_effort: Literal["none", "low", "medium", "high"] | None = None
     regeneration_revision: int = Field(ge=0)
     results_digest: Sha256Hex
 

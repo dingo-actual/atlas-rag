@@ -153,6 +153,10 @@ class TestBuild:
         assert manifest.embedding is not None
         assert manifest.lexical is not None
         assert manifest.contextualization is not None
+        assert (
+            manifest.contextualization.reasoning_effort
+            == builder.session.config.llm.reasoning_effort
+        )
         bundle = builder.session.paths.indexes.parent / artifact.directory
         assert (bundle / "artifacts.json").is_file()
         assert (bundle / "dense.usearch").is_file()
@@ -237,6 +241,23 @@ class TestContextCache:
         assert second.generation_id != first.generation_id
         assert second.requested_context_count == second.context_count
         assert len(contextualizer.calls) == calls + second.context_count
+
+
+class TestGenerationIdentity:
+    """Every contextualization input shapes the generation identity."""
+
+    @pytest.mark.parametrize("effort", ["none", "low", "high"])
+    def test_changed_reasoning_effort_changes_the_generation_id(
+        self, builder: Builder, effort: str
+    ) -> None:
+        default = builder.plan()
+        changed = builder.plan(
+            config=changed_config(
+                builder.session.config, "llm", reasoning_effort=effort
+            )
+        )
+        assert changed.settings_fingerprint != default.settings_fingerprint
+        assert changed.generation_id != default.generation_id
 
 
 class TestReuse:

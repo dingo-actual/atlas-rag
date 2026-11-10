@@ -137,6 +137,30 @@ def assemble_retrieval_text(header: str, context_text: str, source_text: str) ->
     return "\n".join([header, CONTEXT_LABEL, context_text, SOURCE_LABEL, source_text])
 
 
+def contextualization_settings(config: AppConfig) -> dict[str, JsonValue]:
+    """Return the settings shared by the chunk cache and generation identities.
+
+    Args:
+        config (AppConfig): Stored configuration.
+
+    Returns:
+        (dict[str, JsonValue]) Request-shaping contextualization settings.
+    """
+    context = config.contextualization
+    return {
+        "document_builder_version": context.document_builder_version,
+        "prompt_version": context.prompt_version,
+        "endpoint": config.llm.base_url,
+        "model": config.llm.model,
+        "output_token_parameter": config.llm.output_token_parameter,
+        "output_tokens": context.output_tokens,
+        "context_max_tokens": context.context_max_tokens,
+        "temperature": context.temperature,
+        "reasoning_effort": config.llm.reasoning_effort,
+        "regeneration_revision": context.regeneration_revision,
+    }
+
+
 def context_cache_key(
     *,
     document: ContextDocument,
@@ -155,12 +179,9 @@ def context_cache_key(
     Returns:
         (str) SHA-256 digest of the canonical request identity.
     """
-    context = config.contextualization
     identity: JsonValue = {
         "document_sha256": document.document_sha256,
         "owner_id": document.owner_id,
-        "document_builder_version": context.document_builder_version,
-        "prompt_version": context.prompt_version,
         "target": {
             "locator": chunk.source_locator,
             "start": chunk.start,
@@ -168,15 +189,8 @@ def context_cache_key(
             "source_sha256": _text_sha256(chunk.text),
             "header_sha256": _text_sha256(chunk.header),
         },
-        "endpoint": config.llm.base_url,
-        "model": config.llm.model,
-        "output_token_parameter": config.llm.output_token_parameter,
-        "output_tokens": context.output_tokens,
-        "context_max_tokens": context.context_max_tokens,
-        "temperature": context.temperature,
-        "reasoning_effort": config.llm.reasoning_effort,
+        **contextualization_settings(config),
         "tokenizers": [counters.embedding.name, counters.reranker.name],
-        "regeneration_revision": context.regeneration_revision,
     }
     return fingerprint(identity)
 
