@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import time
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from typing import cast
 
 import pytest
+from freezegun import freeze_time
 from openai import OpenAI, OpenAIError, omit
 from openai.types.chat import ChatCompletionChunk
 from openai.types.chat.chat_completion_chunk import (
@@ -188,12 +191,26 @@ class TestStreamCollection:
 
     def test_deltas_are_concatenated_in_order(self) -> None:
         reply = collect_stream(
-            iter(stream_chunks(['{"context": ', '"note"}', ""])), duration=0.5
+            iter(stream_chunks(['{"context": ', '"note"}', ""])),
+            started=time.monotonic(),
         )
         assert reply.text == '{"context": "note"}'
-        assert reply.duration_seconds == 0.5
         assert reply.model == "fake-model-1"
         assert reply.response_id == "chatcmpl-1"
+
+    def test_duration_includes_the_time_spent_receiving_the_stream(self) -> None:
+        chunks = stream_chunks(["first", "second"])
+
+        with freeze_time("2026-01-01T00:00:00+00:00") as frozen:
+
+            def delayed() -> Iterator[ChatCompletionChunk]:
+                for chunk in chunks:
+                    frozen.tick(0.5)
+                    yield chunk
+
+            reply = collect_stream(delayed(), started=time.monotonic())
+
+        assert reply.duration_seconds == pytest.approx(0.5 * len(chunks))
 
     @pytest.mark.parametrize(
         ("usage", "expected"), [((120, 30), (120, 30)), (None, (None, None))]
@@ -201,7 +218,9 @@ class TestStreamCollection:
     def test_reported_usage_is_kept_or_left_null(
         self, usage: tuple[int, int] | None, expected: tuple[int | None, int | None]
     ) -> None:
-        reply = collect_stream(iter(stream_chunks(["text"], usage=usage)), duration=0.1)
+        reply = collect_stream(
+            iter(stream_chunks(["text"], usage=usage)), started=time.monotonic()
+        )
         assert (reply.input_tokens, reply.output_tokens) == expected
 
     @pytest.mark.parametrize(
@@ -231,18 +250,19 @@ class TestStreamCollection:
     ) -> None:
         with pytest.raises(AtlasReviewError) as caught:
             collect_stream(
-                iter(stream_chunks(pieces, finish_reason=finish_reason)), duration=0.1
+                iter(stream_chunks(pieces, finish_reason=finish_reason)),
+                started=time.monotonic(),
             )
         assert caught.value.code == code
 
     def test_tool_call_delta_is_rejected(self) -> None:
         with pytest.raises(AtlasReviewError) as caught:
-            collect_stream(iter((tool_call_chunk(),)), duration=0.1)
+            collect_stream(iter((tool_call_chunk(),)), started=time.monotonic())
         assert caught.value.code == "unsupported_provider_response"
 
     def test_refusal_delta_is_rejected(self) -> None:
         with pytest.raises(AtlasReviewError) as caught:
-            collect_stream(iter((refusal_chunk(),)), duration=0.1)
+            collect_stream(iter((refusal_chunk(),)), started=time.monotonic())
         assert caught.value.code == "unsupported_provider_response"
 
     def test_review_bound_accepts_a_larger_report_than_the_context_bound(
@@ -251,7 +271,7 @@ class TestStreamCollection:
         report = '{"summary": "' + "x" * MAX_CONTEXT_RESPONSE_BYTES + '"}'
         reply = collect_stream(
             iter(stream_chunks([report])),
-            duration=0.1,
+            started=time.monotonic(),
             max_bytes=MAX_REVIEW_RESPONSE_BYTES,
         )
         assert len(reply.text.encode("utf-8")) > MAX_CONTEXT_RESPONSE_BYTES
@@ -261,7 +281,7 @@ class TestStreamCollection:
         with pytest.raises(AtlasReviewError) as caught:
             collect_stream(
                 iter(stream_chunks([oversized])),
-                duration=0.1,
+                started=time.monotonic(),
                 max_bytes=MAX_REVIEW_RESPONSE_BYTES,
             )
         assert caught.value.code == "oversized_provider_response"

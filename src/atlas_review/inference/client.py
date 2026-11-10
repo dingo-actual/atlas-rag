@@ -284,7 +284,7 @@ class ChatContextualizer:
                 stream = self._create(messages, output_tokens, temperature)
                 return collect_stream(
                     stream,
-                    duration=time.monotonic() - started,
+                    started=started,
                     max_bytes=self.max_response_bytes,
                 )
             except OpenAIError as exc:
@@ -362,14 +362,14 @@ class ChatContextualizer:
 def collect_stream(
     chunks: Iterator[ChatCompletionChunk],
     *,
-    duration: float,
+    started: float,
     max_bytes: int = MAX_CONTEXT_RESPONSE_BYTES,
 ) -> ProviderReply:
     """Assemble one streamed completion and reject unusable output.
 
     Args:
         chunks (Iterator[ChatCompletionChunk]): Streamed deltas in order.
-        duration (float): Wall time already spent on the request.
+        started (float): Monotonic start of the request.
         max_bytes (int): Largest accepted response size in UTF-8 bytes.
 
     Returns:
@@ -429,7 +429,7 @@ def collect_stream(
         response_id=response_id,
         input_tokens=input_tokens,
         output_tokens=output_tokens,
-        duration_seconds=duration,
+        duration_seconds=time.monotonic() - started,
     )
 
 
